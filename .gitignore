@@ -1,0 +1,22 @@
+# dependencias
+node_modules/
+
+# next.js
+.next/
+out/
+
+# datos locales (runtime)
+data/
+auth/
+
+# env
+.env.local
+.env.*.local
+
+# sistema
+.DS_Store
+Thumbs.db
+
+# logs
+*.log
+npm-debug.log*
