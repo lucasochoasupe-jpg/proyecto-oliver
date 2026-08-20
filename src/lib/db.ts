@@ -165,7 +165,78 @@ db.exec(`
     phone TEXT NOT NULL,
     updated_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
+
+  CREATE TABLE IF NOT EXISTS horarios_empleado (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    empleado_id INTEGER NOT NULL REFERENCES empleados(id),
+    sucursal_id INTEGER REFERENCES sucursales(id),
+    dia_semana INTEGER NOT NULL CHECK(dia_semana BETWEEN 0 AND 6),
+    hora_inicio TEXT NOT NULL,
+    hora_fin TEXT NOT NULL,
+    tolerancia_min INTEGER,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_horarios_empleado
+    ON horarios_empleado(empleado_id, dia_semana);
+
+  CREATE TABLE IF NOT EXISTS turno_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre TEXT NOT NULL UNIQUE,
+    hora_inicio TEXT NOT NULL,
+    hora_fin TEXT NOT NULL,
+    dias_semana TEXT,
+    tolerancia_min INTEGER,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  CREATE TABLE IF NOT EXISTS settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    tolerancia_min INTEGER NOT NULL DEFAULT 30
+  );
+
+  INSERT OR IGNORE INTO settings (id, tolerancia_min) VALUES (1, 30);
 `);
+
+try { db.exec("ALTER TABLE turno_templates ADD COLUMN dias_semana TEXT"); } catch {}
+try { db.exec("ALTER TABLE turno_templates ADD COLUMN tolerancia_min INTEGER"); } catch {}
+try { db.exec("ALTER TABLE horarios_empleado ADD COLUMN tolerancia_min INTEGER"); } catch {}
+
+// Migración: sucursal_id se creó NOT NULL (los turnos comparaban sucursal
+// contra la marcación real). Ahora la comparación es solo empleado + día +
+// hora, sin importar dónde marcó — sucursal_id queda opcional. Tabla chica,
+// rename+copy+drop es seguro y barato (mismo patrón que asistencia_rechazada).
+try {
+  const cols = db.prepare("PRAGMA table_info(horarios_empleado)").all() as { name: string; notnull: number }[];
+  const sucursalCol = cols.find((c) => c.name === "sucursal_id");
+  if (sucursalCol && sucursalCol.notnull === 1) {
+    withTransaction(() => {
+      db.exec("ALTER TABLE horarios_empleado RENAME TO horarios_empleado_old");
+      db.exec(`
+        CREATE TABLE horarios_empleado (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          empleado_id INTEGER NOT NULL REFERENCES empleados(id),
+          sucursal_id INTEGER REFERENCES sucursales(id),
+          dia_semana INTEGER NOT NULL CHECK(dia_semana BETWEEN 0 AND 6),
+          hora_inicio TEXT NOT NULL,
+          hora_fin TEXT NOT NULL,
+          tolerancia_min INTEGER,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+      `);
+      db.exec(`
+        INSERT INTO horarios_empleado
+          (id, empleado_id, sucursal_id, dia_semana, hora_inicio, hora_fin, tolerancia_min, created_at)
+        SELECT id, empleado_id, sucursal_id, dia_semana, hora_inicio, hora_fin, tolerancia_min, created_at
+        FROM horarios_empleado_old;
+      `);
+      db.exec("DROP TABLE horarios_empleado_old");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_horarios_empleado ON horarios_empleado(empleado_id, dia_semana)");
+    });
+  }
+} catch (err) {
+  console.error("[db] Error migrando horarios_empleado:", err);
+}
 
 // Migración: la tabla se creó originalmente con sucursal_id/tipo/lat/lon
 // NOT NULL (pensada solo para rechazos por ubicación). Ahora también registra
@@ -1019,6 +1090,323 @@ function aTurno(nombre: string, entrada: AsistenciaRecord, salida: AsistenciaRec
     salida_at: salida?.created_at ?? null,
     horas: salida ? (salida.created_at - entrada.created_at) / 3600 : null,
   };
+}
+
+// ── Horarios esperados por empleado ─────────────────────────────────────────
+// Franjas horarias definidas a mano (día de semana + sucursal + hora inicio/fin).
+// Un empleado puede tener varias filas: turno partido (mismo día, dos franjas)
+// y/o trabajar en más de una sucursal. dia_semana sigue la convención de
+// Date.getDay(): 0=domingo ... 6=sábado.
+
+export interface HorarioEmpleado {
+  id: number;
+  empleado_id: number;
+  empleado_nombre: string;
+  sucursal_id: number | null;
+  sucursal_nombre: string | null;
+  dia_semana: number;
+  hora_inicio: string;
+  hora_fin: string;
+  tolerancia_min: number | null;
+}
+
+export function listHorarios(empleadoId?: number): HorarioEmpleado[] {
+  let query = `
+    SELECT h.id, h.empleado_id, e.nombre AS empleado_nombre,
+           h.sucursal_id, s.nombre AS sucursal_nombre,
+           h.dia_semana, h.hora_inicio, h.hora_fin, h.tolerancia_min
+    FROM horarios_empleado h
+    JOIN empleados e ON e.id = h.empleado_id
+    LEFT JOIN sucursales s ON s.id = h.sucursal_id
+  `;
+  const params: number[] = [];
+  if (empleadoId !== undefined) {
+    query += " WHERE h.empleado_id = ?";
+    params.push(empleadoId);
+  }
+  query += " ORDER BY e.nombre ASC, h.dia_semana ASC, h.hora_inicio ASC";
+  return db.prepare(query).all(...params) as unknown as HorarioEmpleado[];
+}
+
+export function insertHorario(params: {
+  empleado_id: number;
+  sucursal_id?: number | null;
+  dia_semana: number;
+  hora_inicio: string;
+  hora_fin: string;
+  tolerancia_min?: number | null;
+}): void {
+  db.prepare(
+    "INSERT INTO horarios_empleado (empleado_id, sucursal_id, dia_semana, hora_inicio, hora_fin, tolerancia_min) VALUES (?, ?, ?, ?, ?, ?)"
+  ).run(
+    params.empleado_id,
+    params.sucursal_id ?? null,
+    params.dia_semana,
+    params.hora_inicio,
+    params.hora_fin,
+    params.tolerancia_min ?? null
+  );
+}
+
+export function updateHorario(
+  id: number,
+  patch: { sucursal_id?: number | null; dia_semana?: number; hora_inicio?: string; hora_fin?: string; tolerancia_min?: number | null }
+): void {
+  const current = db.prepare("SELECT * FROM horarios_empleado WHERE id = ?").get(id) as
+    | { sucursal_id: number | null; dia_semana: number; hora_inicio: string; hora_fin: string; tolerancia_min: number | null }
+    | undefined;
+  if (!current) return;
+  db.prepare(
+    "UPDATE horarios_empleado SET sucursal_id = ?, dia_semana = ?, hora_inicio = ?, hora_fin = ?, tolerancia_min = ? WHERE id = ?"
+  ).run(
+    patch.sucursal_id !== undefined ? patch.sucursal_id : current.sucursal_id,
+    patch.dia_semana ?? current.dia_semana,
+    patch.hora_inicio ?? current.hora_inicio,
+    patch.hora_fin ?? current.hora_fin,
+    patch.tolerancia_min !== undefined ? patch.tolerancia_min : current.tolerancia_min,
+    id
+  );
+}
+
+export function deleteHorario(id: number): void {
+  db.prepare("DELETE FROM horarios_empleado WHERE id = ?").run(id);
+}
+
+// Asigna el mismo turno a varios empleados y varios días en un solo paso (una
+// fila en horarios_empleado por cada combinación empleado × día). Sin sucursal:
+// el cumplimiento compara solo empleado + día + hora, sin importar dónde marcó.
+export function insertHorariosBulk(params: {
+  empleado_ids: number[];
+  dias_semana: number[];
+  hora_inicio: string;
+  hora_fin: string;
+  tolerancia_min?: number | null;
+}): void {
+  withTransaction(() => {
+    for (const empleado_id of params.empleado_ids) {
+      for (const dia_semana of params.dias_semana) {
+        insertHorario({
+          empleado_id,
+          dia_semana,
+          hora_inicio: params.hora_inicio,
+          hora_fin: params.hora_fin,
+          tolerancia_min: params.tolerancia_min,
+        });
+      }
+    }
+  });
+}
+
+// ── Plantillas de turno ──────────────────────────────────────────────────────
+// Un "molde" con nombre reutilizable (hora_inicio/hora_fin + opcionalmente los
+// días habituales) para no tener que tipear el horario cada vez al asignar
+// turnos. A propósito NO tiene sucursal: eso se elige al momento de asignar
+// (una misma plantilla, ej. "Turno ventas mañana", puede usarse en distintas
+// sucursales). Los días son opcionales ("o que haga falta"): si se cargan, se
+// usan para precompletar la asignación masiva, pero siguen siendo editables
+// ahí — no atan la plantilla a esos días para siempre.
+
+export interface TurnoTemplate {
+  id: number;
+  nombre: string;
+  hora_inicio: string;
+  hora_fin: string;
+  dias_semana: number[];
+  tolerancia_min: number | null;
+}
+
+function diasToText(dias: number[]): string | null {
+  return dias.length > 0 ? dias.join(",") : null;
+}
+
+function textToDias(text: string | null): number[] {
+  if (!text) return [];
+  return text.split(",").map(Number).filter((n) => !Number.isNaN(n));
+}
+
+export function listTurnoTemplates(): TurnoTemplate[] {
+  const rows = db.prepare("SELECT * FROM turno_templates ORDER BY nombre ASC").all() as unknown as (Omit<
+    TurnoTemplate,
+    "dias_semana"
+  > & { dias_semana: string | null })[];
+  return rows.map((r) => ({ ...r, dias_semana: textToDias(r.dias_semana) }));
+}
+
+export function insertTurnoTemplate(
+  nombre: string,
+  hora_inicio: string,
+  hora_fin: string,
+  dias_semana: number[] = [],
+  tolerancia_min: number | null = null
+): void {
+  db.prepare(
+    "INSERT INTO turno_templates (nombre, hora_inicio, hora_fin, dias_semana, tolerancia_min) VALUES (?, ?, ?, ?, ?)"
+  ).run(nombre, hora_inicio, hora_fin, diasToText(dias_semana), tolerancia_min);
+}
+
+export function deleteTurnoTemplate(id: number): void {
+  db.prepare("DELETE FROM turno_templates WHERE id = ?").run(id);
+}
+
+// ── Configuración ────────────────────────────────────────────────────────────
+
+export function getTolerancia(): number {
+  const row = db.prepare("SELECT tolerancia_min FROM settings WHERE id = 1").get() as { tolerancia_min: number };
+  return row.tolerancia_min;
+}
+
+export function setTolerancia(min: number): void {
+  db.prepare("UPDATE settings SET tolerancia_min = ? WHERE id = 1").run(min);
+}
+
+// ── Cumplimiento de horarios ─────────────────────────────────────────────────
+// Compara cada turno real (calcularHorasTrabajadas) contra el horario esperado
+// del empleado ese día de semana en esa sucursal, con una tolerancia en minutos
+// configurable (ver getTolerancia/setTolerancia, default 30). Todo el cálculo
+// de hora/día usa el mismo offset fijo AR (-3h, sin horario de verano) que el
+// resto del archivo — nunca la TZ del sistema operativo.
+
+const AR_OFFSET_SEC = 3 * 3600;
+
+function minutosDelDia(unixSec: number): number {
+  const d = new Date((unixSec - AR_OFFSET_SEC) * 1000);
+  return d.getUTCHours() * 60 + d.getUTCMinutes();
+}
+
+function diaSemanaAR(unixSec: number): number {
+  const d = new Date((unixSec - AR_OFFSET_SEC) * 1000);
+  return d.getUTCDay();
+}
+
+function fechaAR(unixSec: number): string {
+  const d = new Date((unixSec - AR_OFFSET_SEC) * 1000);
+  return d.toISOString().slice(0, 10);
+}
+
+function horaAMinutos(hora: string): number {
+  const [h, m] = hora.split(":").map(Number);
+  return h * 60 + m;
+}
+
+export interface CumplimientoRow {
+  nombre: string;
+  sucursal_nombre: string;
+  fecha: string;
+  entrada_real: number;
+  entrada_esperada: string | null;
+  diff_entrada_min: number | null;
+  salida_real: number | null;
+  salida_esperada: string | null;
+  diff_salida_min: number | null;
+  en_curso: boolean;
+  estado: "a_horario" | "tarde" | "salida_anticipada" | "tarde_y_anticipada" | "sin_horario";
+  tolerancia_aplicada: number | null;
+}
+
+export function calcularCumplimiento(filters?: {
+  desde?: string;
+  hasta?: string;
+  sucursal?: string;
+  nombres?: string[];
+}): CumplimientoRow[] {
+  const toleranciaGeneral = getTolerancia();
+  const turnos = calcularHorasTrabajadas(filters);
+  const horarios = db
+    .prepare(
+      `SELECT e.nombre AS empleado_nombre,
+              h.dia_semana, h.hora_inicio, h.hora_fin, h.tolerancia_min
+       FROM horarios_empleado h
+       JOIN empleados e ON e.id = h.empleado_id`
+    )
+    .all() as {
+    empleado_nombre: string;
+    dia_semana: number;
+    hora_inicio: string;
+    hora_fin: string;
+    tolerancia_min: number | null;
+  }[];
+
+  return turnos.map((t): CumplimientoRow => {
+    const dia = diaSemanaAR(t.entrada_at);
+    const diaAnterior = (dia + 6) % 7;
+    const enCurso = t.salida_at === null;
+    const empleadoNombre = t.nombre.trim().toLowerCase();
+    const entradaMin = minutosDelDia(t.entrada_at);
+
+    // Compara solo empleado + día + hora — la sucursal donde marcó no importa
+    // para decidir si el turno esperado se cumplió. Nombre normalizado
+    // (LOWER+TRIM, igual que el JOIN de listAsistencia) para no depender de
+    // que coincidan mayúsculas/espacios exactos entre asistencia y nómina.
+    // Turnos nocturnos (hora_fin <= hora_inicio, ej. 22:00→06:00) se cargan
+    // bajo el día en que ARRANCAN. Si el empleado llega tan tarde que su
+    // marcación cae del lado de hoy en el calendario (después de medianoche),
+    // igual hay que poder emparejarlo con el turno nocturno de AYER — para
+    // eso se suman 1440 min al comparar, y se toma el candidato (de hoy o de
+    // ayer) más cercano a la hora real de entrada.
+    const candidatosHoy = horarios
+      .filter((h) => h.empleado_nombre.trim().toLowerCase() === empleadoNombre && h.dia_semana === dia)
+      .map((h) => ({ h, diff: entradaMin - horaAMinutos(h.hora_inicio) }));
+    const candidatosAyerNocturno = horarios
+      .filter(
+        (h) =>
+          h.empleado_nombre.trim().toLowerCase() === empleadoNombre &&
+          h.dia_semana === diaAnterior &&
+          horaAMinutos(h.hora_fin) <= horaAMinutos(h.hora_inicio)
+      )
+      .map((h) => ({ h, diff: entradaMin + 1440 - horaAMinutos(h.hora_inicio) }));
+    const candidatos = [...candidatosHoy, ...candidatosAyerNocturno];
+
+    if (candidatos.length === 0) {
+      return {
+        nombre: t.nombre,
+        sucursal_nombre: t.sucursal_nombre,
+        fecha: fechaAR(t.entrada_at),
+        entrada_real: t.entrada_at,
+        entrada_esperada: null,
+        diff_entrada_min: null,
+        salida_real: t.salida_at,
+        salida_esperada: null,
+        diff_salida_min: null,
+        en_curso: enCurso,
+        estado: "sin_horario",
+        tolerancia_aplicada: null,
+      };
+    }
+
+    const mejor = candidatos.reduce((mejor, c) => (Math.abs(c.diff) < Math.abs(mejor.diff) ? c : mejor));
+    const horario = mejor.h;
+    // Tolerancia particular del turno si está definida; si no, la general.
+    const tolerancia = horario.tolerancia_min ?? toleranciaGeneral;
+
+    const diffEntrada = mejor.diff;
+    const tarde = diffEntrada > tolerancia;
+
+    let diffSalida: number | null = null;
+    let anticipada = false;
+    if (t.salida_at !== null) {
+      const salidaMin = minutosDelDia(t.salida_at);
+      diffSalida = horaAMinutos(horario.hora_fin) - salidaMin;
+      anticipada = diffSalida > tolerancia;
+    }
+
+    const estado: CumplimientoRow["estado"] =
+      tarde && anticipada ? "tarde_y_anticipada" : tarde ? "tarde" : anticipada ? "salida_anticipada" : "a_horario";
+
+    return {
+      nombre: t.nombre,
+      sucursal_nombre: t.sucursal_nombre,
+      fecha: fechaAR(t.entrada_at),
+      entrada_real: t.entrada_at,
+      entrada_esperada: horario.hora_inicio,
+      diff_entrada_min: diffEntrada,
+      salida_real: t.salida_at,
+      salida_esperada: horario.hora_fin,
+      diff_salida_min: diffSalida,
+      en_curso: enCurso,
+      estado,
+      tolerancia_aplicada: tolerancia,
+    };
+  });
 }
 
 export default db;

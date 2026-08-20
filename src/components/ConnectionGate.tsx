@@ -5,6 +5,7 @@ import QRScreen from "./QRScreen";
 import DashboardHeader from "./DashboardHeader";
 import ConversationList from "./ConversationList";
 import ConversationPanel from "./ConversationPanel";
+import { useSidebarHidden } from "./AppShell";
 
 interface Conversation {
   id: number;
@@ -22,6 +23,8 @@ export default function ConnectionGate() {
   const [phone, setPhone] = useState("");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+
+  useSidebarHidden(appStatus !== "connected");
 
   const checkStatus = useCallback(async () => {
     try {
