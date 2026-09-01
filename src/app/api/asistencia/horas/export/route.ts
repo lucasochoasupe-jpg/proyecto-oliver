@@ -1,19 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import { calcularHorasTrabajadas } from "@/lib/db";
+import { AR_TZ, hoyISO, inicioDeMesISO } from "@/lib/date-ar";
 
 export const dynamic = "force-dynamic";
-
-const AR_TZ = "America/Argentina/Buenos_Aires";
-
-function hoyISO() {
-  return new Date().toLocaleDateString("sv", { timeZone: AR_TZ });
-}
-
-function inicioDeMesISO() {
-  const hoy = hoyISO();
-  return `${hoy.slice(0, 7)}-01`;
-}
 
 const HEADER_COLOR = "2C1810";
 const EN_CURSO_COLOR = "FEF3C7";

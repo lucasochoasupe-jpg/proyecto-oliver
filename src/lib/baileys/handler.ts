@@ -18,8 +18,19 @@ import {
   getFlowState,
   setFlowState,
   deleteFlowState,
+  getCertificadoPendientePorId,
+  resolverCertificadoPendientePorId,
+  guardarLegajoArchivo,
 } from "../db";
-import { handleRRHH, clearRRHH } from "../rrhh-flow";
+import {
+  handleRRHH,
+  clearRRHH,
+  esperandoCertificado,
+  getCertificadoPendienteIdSeleccionado,
+  esperandoCertificadoInline,
+  getNombreCertificadoInline,
+  marcarCertificadoEntregado,
+} from "../rrhh-flow";
 import { resolvePhone, setLidPhone } from "./contacts";
 import { sendSafe } from "./send";
 
@@ -399,9 +410,21 @@ async function handleMediaForward(
   const adminPhone = process.env.ADMIN_PHONE;
   console.log(`[bot] <- Archivo (${tipo}) recibido de ${senderLabel}`);
 
+  // Solo vinculamos este archivo a un certificado si el empleado pasó por uno
+  // de estos dos caminos explícitos (ver comentario en esperandoCertificado
+  // en rrhh-flow.ts): [4] Entregar certificado pendiente confirmado, o recién
+  // avisó una ausencia por Enfermedad diciendo que sí tiene certificado.
+  // Cualquier otra imagen/documento se reenvía igual, pero sin vincular nada.
+  const pendienteId = esperandoCertificado(phone) ? getCertificadoPendienteIdSeleccionado(phone) : null;
+  const pendiente = pendienteId ? getCertificadoPendientePorId(pendienteId) : null;
+  const nombreInline = !pendiente && esperandoCertificadoInline(phone) ? getNombreCertificadoInline(phone) : null;
+  const esCertificadoVinculado = Boolean(pendiente || nombreInline);
+
   // Confirmar al empleado y preguntar cierre
   await sendSafe(sock, sendJid, {
-    text: "Recibí tu archivo. Lo estoy enviando a Administración ahora mismo. ✅\n\n¿Necesitás algo más o damos por terminada la conversación?\n* [1] Necesito hacer otra consulta\n* [2] Dar por terminada la conversación",
+    text: esCertificadoVinculado
+      ? "Recibí tu certificado y lo vinculé a tu aviso de ausencia. Lo estoy enviando a Administración ahora mismo. ✅\n\n¿Necesitás algo más o damos por terminada la conversación?\n* [1] Necesito hacer otra consulta\n* [2] Dar por terminada la conversación"
+      : "Recibí tu archivo. Lo estoy enviando a Administración ahora mismo. ✅\n\n¿Necesitás algo más o damos por terminada la conversación?\n* [1] Necesito hacer otra consulta\n* [2] Dar por terminada la conversación",
   });
 
   if (!adminPhone) {
@@ -416,18 +439,48 @@ async function handleMediaForward(
   try {
     // Descargar y reenviar el archivo
     const buffer = await downloadMediaMessage(msg, "buffer", {}) as Buffer;
-    const caption = `📎 Certificado de ${senderLabel}`;
+    const caption = pendiente
+      ? `📎 Certificado de ${senderLabel} — ✅ resuelve el aviso de ausencia del ${new Date(
+          pendiente.created_at * 1000
+        ).toLocaleDateString("es-AR", { timeZone: "America/Argentina/Buenos_Aires" })}`
+      : `📎 Certificado de ${senderLabel}`;
 
+    let mimetype: string;
+    let fileName: string;
     if (tipo === "imageMessage") {
-      const mimetype = msg.message?.imageMessage?.mimetype ?? "image/jpeg";
+      mimetype = msg.message?.imageMessage?.mimetype ?? "image/jpeg";
+      fileName = `certificado-${Date.now()}.${mimetype.split("/")[1] ?? "jpg"}`;
       await sendSafe(sock, adminJid, { image: buffer, caption, mimetype });
     } else {
       const docMsg =
         msg.message?.documentMessage ??
         msg.message?.documentWithCaptionMessage?.message?.documentMessage;
-      const mimetype = docMsg?.mimetype ?? "application/pdf";
-      const fileName = docMsg?.fileName ?? "certificado";
+      mimetype = docMsg?.mimetype ?? "application/pdf";
+      fileName = docMsg?.fileName ?? "certificado";
       await sendSafe(sock, adminJid, { document: buffer, caption, mimetype, fileName });
+    }
+
+    // Guardar en el legajo del empleado — solo cuando el archivo pasó por uno
+    // de los caminos confirmados de certificado (ver comentario arriba);
+    // cualquier otro archivo se reenvía igual a Administración, pero no se archiva.
+    if (pendiente || nombreInline) {
+      const nombreEmpleado = pendiente ? pendiente.nombre : nombreInline;
+      const empleado = nombreEmpleado ? getEmpleadoByNombre(nombreEmpleado) : null;
+      if (empleado) {
+        guardarLegajoArchivo({
+          empleadoId: empleado.id,
+          nombreOriginal: fileName,
+          buffer,
+          mimetype,
+          origen: "certificado_bot",
+          certificadoPendienteId: pendiente?.id,
+        });
+        console.log(`[bot] -> Certificado guardado en legajo de ${empleado.nombre}`);
+      } else {
+        console.warn(`[bot] Certificado confirmado pero no se encontró empleado "${nombreEmpleado}" para archivar en su legajo`);
+      }
+      if (pendiente) resolverCertificadoPendientePorId(pendiente.id);
+      marcarCertificadoEntregado(phone);
     }
 
     console.log(`[bot] -> Archivo reenviado a admin (${adminPhone})`);

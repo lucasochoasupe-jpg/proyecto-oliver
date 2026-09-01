@@ -6,6 +6,8 @@ import fs from "node:fs";
 const DATA_DIR = path.resolve(process.cwd(), "data");
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
+const LEGAJOS_DIR = path.join(DATA_DIR, "legajos");
+
 const DB_PATH = path.join(DATA_DIR, "messages.db");
 const db = new DatabaseSync(DB_PATH);
 
@@ -16,6 +18,11 @@ db.exec("PRAGMA busy_timeout = 5000");
 // Migraciones
 try { db.exec("ALTER TABLE empleados ADD COLUMN jid TEXT"); } catch {}
 try { db.exec("ALTER TABLE empleados ADD COLUMN celular TEXT"); } catch {}
+try { db.exec("ALTER TABLE empleados ADD COLUMN tipo_pago TEXT"); } catch {}
+try { db.exec("ALTER TABLE empleados ADD COLUMN sueldo_mensual REAL"); } catch {}
+try { db.exec("ALTER TABLE empleados ADD COLUMN valor_hora REAL"); } catch {}
+try { db.exec("ALTER TABLE empleados ADD COLUMN valor_dia REAL"); } catch {}
+try { db.exec("ALTER TABLE empleados ADD COLUMN fecha_ingreso TEXT"); } catch {}
 
 // La nómina inicial solo debe cargarse la primera vez que se crea la base
 // (instalación nueva) — si corriera en cada arranque, un empleado borrado desde
@@ -159,6 +166,51 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_asistencia_rechazada_pendientes
     ON asistencia_rechazada(resuelto, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS certificados_pendientes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id INTEGER NOT NULL REFERENCES conversations(id),
+    phone TEXT NOT NULL,
+    nombre TEXT,
+    admin_message_id INTEGER REFERENCES messages(id),
+    resuelto INTEGER NOT NULL DEFAULT 0,
+    resuelto_at INTEGER,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_certificados_pendientes_activo
+    ON certificados_pendientes(phone, resuelto);
+
+  CREATE TABLE IF NOT EXISTS ausencias_reportadas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    empleado_nombre TEXT NOT NULL,
+    categoria TEXT NOT NULL,
+    fecha_inicio TEXT NOT NULL,
+    fecha_fin TEXT NOT NULL,
+    certificado_pendiente INTEGER NOT NULL DEFAULT 0,
+    phone TEXT,
+    admin_message_id INTEGER REFERENCES messages(id),
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ausencias_reportadas_rango
+    ON ausencias_reportadas(empleado_nombre, fecha_inicio, fecha_fin);
+
+  CREATE TABLE IF NOT EXISTS legajo_archivos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    empleado_id INTEGER NOT NULL REFERENCES empleados(id),
+    nombre_original TEXT NOT NULL,
+    nombre_archivo TEXT NOT NULL,
+    mimetype TEXT NOT NULL,
+    tamanio_bytes INTEGER NOT NULL,
+    origen TEXT CHECK(origen IN ('certificado_bot', 'manual')) NOT NULL,
+    certificado_pendiente_id INTEGER REFERENCES certificados_pendientes(id),
+    subido_por TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_legajo_archivos_empleado
+    ON legajo_archivos(empleado_id, created_at DESC);
 
   CREATE TABLE IF NOT EXISTS lid_phone (
     lid TEXT PRIMARY KEY,
@@ -364,11 +416,12 @@ export function listConversations(): ConversationWithPreview[] {
     .all() as unknown as ConversationWithPreview[];
 }
 
-function withTransaction(fn: () => void): void {
+function withTransaction<T>(fn: () => T): T {
   db.exec("BEGIN");
   try {
-    fn();
+    const result = fn();
     db.exec("COMMIT");
+    return result;
   } catch (err) {
     db.exec("ROLLBACK");
     throw err;
@@ -409,6 +462,18 @@ export function insertMessage(
   withTransaction(() => {
     insertMsg.run(conversationId, role, content);
     updateLastMsg.run(conversationId);
+  });
+}
+
+export function insertMessageReturningId(
+  conversationId: number,
+  role: "user" | "assistant" | "human",
+  content: string
+): number {
+  return withTransaction(() => {
+    const info = insertMsg.run(conversationId, role, content);
+    updateLastMsg.run(conversationId);
+    return Number(info.lastInsertRowid);
   });
 }
 
@@ -511,6 +576,241 @@ export function clearPendingAdminReport(conversationId: number): void {
   db.prepare("DELETE FROM pending_admin_reports WHERE conversation_id = ?").run(conversationId);
 }
 
+// ── Certificados médicos pendientes ─────────────────────────────────────────
+// Se crea uno cuando un empleado avisa una Enfermedad "sin certificado". Queda
+// abierto (resuelto = 0) hasta que ese mismo teléfono manda un archivo por
+// WhatsApp (ver handleMediaForward), momento en que se cierra automáticamente
+// y se avisa a Administración que ese archivo corresponde a ese aviso.
+
+export interface CertificadoPendiente {
+  id: number;
+  conversation_id: number;
+  phone: string;
+  nombre: string | null;
+  admin_message_id: number | null;
+  created_at: number;
+}
+
+export function crearCertificadoPendiente(
+  conversationId: number,
+  phone: string,
+  nombre: string,
+  adminMessageId: number | null
+): void {
+  db.prepare(
+    `INSERT INTO certificados_pendientes (conversation_id, phone, nombre, admin_message_id)
+     VALUES (?, ?, ?, ?)`
+  ).run(conversationId, phone, nombre, adminMessageId);
+}
+
+// Todos los pendientes abiertos de ese teléfono (puede haber más de uno si el
+// empleado avisó varias Enfermedades "sin certificado" sin resolver ninguna
+// todavía) — más viejo primero. Se usa para el submenú "Entregar certificado
+// pendiente", donde el empleado tiene que elegir/confirmar explícitamente
+// cuál está entregando antes de que se lo dé por resuelto.
+export function listCertificadosPendientesActivos(phone: string): CertificadoPendiente[] {
+  return db
+    .prepare(
+      `SELECT id, conversation_id, phone, nombre, admin_message_id, created_at
+       FROM certificados_pendientes
+       WHERE phone = ? AND resuelto = 0
+       ORDER BY created_at ASC`
+    )
+    .all(phone) as unknown as CertificadoPendiente[];
+}
+
+export function getCertificadoPendientePorId(id: number): CertificadoPendiente | null {
+  return (
+    (db
+      .prepare(
+        `SELECT id, conversation_id, phone, nombre, admin_message_id, created_at
+         FROM certificados_pendientes WHERE id = ?`
+      )
+      .get(id) as CertificadoPendiente | undefined) ?? null
+  );
+}
+
+// Cierra ESE pendiente puntual (por id, no "el más reciente del teléfono" —
+// un mismo teléfono puede tener varios abiertos a la vez) y lo devuelve, para
+// que el caller pueda avisarle a Administración cuál aviso quedó resuelto.
+export function resolverCertificadoPendientePorId(id: number): CertificadoPendiente | null {
+  const row = getCertificadoPendientePorId(id);
+  if (!row) return null;
+  db.prepare(
+    "UPDATE certificados_pendientes SET resuelto = 1, resuelto_at = unixepoch() WHERE id = ?"
+  ).run(id);
+  return row;
+}
+
+// ── Ausencias reportadas por el empleado ────────────────────────────────────
+// Se crea un registro cuando el empleado, dentro del flujo de RRHH, confirma
+// un rango de fechas para un aviso de Enfermedad / Motivo Personal /
+// Vacaciones (Urgencia no tiene rango de fechas, no genera registro acá). La
+// liquidación de sueldos (calcularAusencias) usa esto para no descontar como
+// ausencia injustificada un día que el empleado sí avisó.
+
+export interface AusenciaReportada {
+  id: number;
+  empleado_nombre: string;
+  categoria: string;
+  fecha_inicio: string;
+  fecha_fin: string;
+  certificado_pendiente: number;
+  phone: string | null;
+  created_at: number;
+}
+
+export function crearAusenciaReportada(data: {
+  empleadoNombre: string;
+  categoria: string;
+  fechaInicio: string;
+  fechaFin: string;
+  certificadoPendiente: boolean;
+  phone: string;
+  adminMessageId: number | null;
+}): void {
+  db.prepare(
+    `INSERT INTO ausencias_reportadas
+       (empleado_nombre, categoria, fecha_inicio, fecha_fin, certificado_pendiente, phone, admin_message_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    data.empleadoNombre,
+    data.categoria,
+    data.fechaInicio,
+    data.fechaFin,
+    data.certificadoPendiente ? 1 : 0,
+    data.phone,
+    data.adminMessageId
+  );
+}
+
+// Avisos cuyo rango [fecha_inicio, fecha_fin] se solapa con [desde, hasta].
+function getAusenciasReportadas(desde: string, hasta: string): AusenciaReportada[] {
+  return db
+    .prepare(
+      `SELECT id, empleado_nombre, categoria, fecha_inicio, fecha_fin, certificado_pendiente, phone, created_at
+       FROM ausencias_reportadas
+       WHERE fecha_inicio <= ? AND fecha_fin >= ?`
+    )
+    .all(hasta, desde) as unknown as AusenciaReportada[];
+}
+
+// ── Legajos (archivos por empleado) ──────────────────────────────────────────
+// Cada empleado tiene una carpeta en data/legajos/<empleado_id>/ con los
+// archivos físicos; la tabla legajo_archivos guarda los metadatos. Dos
+// orígenes: "certificado_bot" (el bot lo guarda solo cuando el empleado
+// confirmó el vínculo por el menú "[4] Entregar certificado pendiente" — ver
+// esperandoCertificado en rrhh-flow.ts) y "manual" (un admin lo sube desde
+// /legajos). Nunca se guarda de forma automática un archivo que no pasó por
+// esa confirmación — mismo criterio que certificados_pendientes.
+
+export interface LegajoArchivo {
+  id: number;
+  empleado_id: number;
+  nombre_original: string;
+  nombre_archivo: string;
+  mimetype: string;
+  tamanio_bytes: number;
+  origen: "certificado_bot" | "manual";
+  certificado_pendiente_id: number | null;
+  subido_por: string | null;
+  created_at: number;
+}
+
+function sanitizarNombreArchivo(nombre: string): string {
+  const base = nombre.replace(/[/\\?%*:|"<>]/g, "_").slice(-150);
+  return base.length > 0 ? base : "archivo";
+}
+
+export function carpetaLegajo(empleadoId: number): string {
+  return path.join(LEGAJOS_DIR, String(empleadoId));
+}
+
+export function guardarLegajoArchivo(data: {
+  empleadoId: number;
+  nombreOriginal: string;
+  buffer: Buffer;
+  mimetype: string;
+  origen: "certificado_bot" | "manual";
+  certificadoPendienteId?: number | null;
+  subidoPor?: string | null;
+}): LegajoArchivo {
+  const carpeta = carpetaLegajo(data.empleadoId);
+  fs.mkdirSync(carpeta, { recursive: true });
+
+  const nombreArchivo = `${Date.now()}-${sanitizarNombreArchivo(data.nombreOriginal)}`;
+  fs.writeFileSync(path.join(carpeta, nombreArchivo), data.buffer);
+
+  const info = db
+    .prepare(
+      `INSERT INTO legajo_archivos
+         (empleado_id, nombre_original, nombre_archivo, mimetype, tamanio_bytes, origen, certificado_pendiente_id, subido_por)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      data.empleadoId,
+      data.nombreOriginal,
+      nombreArchivo,
+      data.mimetype,
+      data.buffer.length,
+      data.origen,
+      data.certificadoPendienteId ?? null,
+      data.subidoPor ?? null
+    );
+
+  return getLegajoArchivo(Number(info.lastInsertRowid))!;
+}
+
+export function listLegajoArchivos(empleadoId: number): LegajoArchivo[] {
+  return db
+    .prepare("SELECT * FROM legajo_archivos WHERE empleado_id = ? ORDER BY created_at DESC")
+    .all(empleadoId) as unknown as LegajoArchivo[];
+}
+
+export function getLegajoArchivo(id: number): LegajoArchivo | null {
+  return (db.prepare("SELECT * FROM legajo_archivos WHERE id = ?").get(id) as unknown as LegajoArchivo | undefined) ?? null;
+}
+
+export function rutaLegajoArchivo(archivo: LegajoArchivo): string {
+  return path.join(carpetaLegajo(archivo.empleado_id), archivo.nombre_archivo);
+}
+
+export function eliminarLegajoArchivo(id: number): boolean {
+  const archivo = getLegajoArchivo(id);
+  if (!archivo) return false;
+  try {
+    fs.unlinkSync(rutaLegajoArchivo(archivo));
+  } catch {
+    // El archivo físico ya no estaba — igual borramos el registro.
+  }
+  db.prepare("DELETE FROM legajo_archivos WHERE id = ?").run(id);
+  return true;
+}
+
+// Resumen para la lista principal de /legajos: un empleado por fila, con la
+// cantidad de archivos y la fecha del más reciente.
+export interface LegajoResumen {
+  empleado_id: number;
+  nombre: string;
+  activo: number;
+  cantidad_archivos: number;
+  ultimo_archivo_at: number | null;
+}
+
+export function listLegajosResumen(): LegajoResumen[] {
+  return db
+    .prepare(
+      `SELECT e.id AS empleado_id, e.nombre, e.activo,
+              COUNT(l.id) AS cantidad_archivos,
+              MAX(l.created_at) AS ultimo_archivo_at
+       FROM empleados e
+       LEFT JOIN legajo_archivos l ON l.empleado_id = e.id
+       GROUP BY e.id
+       ORDER BY e.nombre ASC`
+    )
+    .all() as unknown as LegajoResumen[];
+}
+
 // ── Estado de flujos conversacionales (persistente) ───────────────────────────
 // Guarda el paso en el que va un teléfono dentro de un flujo (asistencia / rrhh)
 // para que un reinicio del bot no corte a quien está a mitad de camino.
@@ -582,6 +882,11 @@ export interface Empleado {
   jid: string | null;
   activo: number;
   created_at: number;
+  tipo_pago: "mensual" | "hora" | "dia" | null;
+  sueldo_mensual: number | null;
+  valor_hora: number | null;
+  valor_dia: number | null;
+  fecha_ingreso: string | null; // ISO (YYYY-MM-DD) — usada para calcular el saldo de vacaciones
 }
 
 function sameWords(a: string[], b: string[]): boolean {
@@ -671,14 +976,34 @@ export function insertEmpleado(nombre: string, celular?: string): void {
   db.prepare("INSERT INTO empleados (nombre, celular) VALUES (?, ?)").run(nombre, celular ?? null);
 }
 
-export function updateEmpleado(id: number, patch: { nombre?: string; celular?: string | null; jid?: string | null; activo?: number }): void {
+export function updateEmpleado(
+  id: number,
+  patch: {
+    nombre?: string;
+    celular?: string | null;
+    jid?: string | null;
+    activo?: number;
+    tipo_pago?: "mensual" | "hora" | "dia" | null;
+    sueldo_mensual?: number | null;
+    valor_hora?: number | null;
+    valor_dia?: number | null;
+    fecha_ingreso?: string | null;
+  }
+): void {
   const current = db.prepare("SELECT * FROM empleados WHERE id = ?").get(id) as unknown as Empleado | undefined;
   if (!current) return;
-  db.prepare("UPDATE empleados SET nombre = ?, celular = ?, jid = ?, activo = ? WHERE id = ?").run(
+  db.prepare(
+    "UPDATE empleados SET nombre = ?, celular = ?, jid = ?, activo = ?, tipo_pago = ?, sueldo_mensual = ?, valor_hora = ?, valor_dia = ?, fecha_ingreso = ? WHERE id = ?"
+  ).run(
     patch.nombre ?? current.nombre,
     patch.celular !== undefined ? patch.celular : current.celular,
     patch.jid !== undefined ? patch.jid : current.jid,
     patch.activo !== undefined ? patch.activo : current.activo,
+    patch.tipo_pago !== undefined ? patch.tipo_pago : current.tipo_pago,
+    patch.sueldo_mensual !== undefined ? patch.sueldo_mensual : current.sueldo_mensual,
+    patch.valor_hora !== undefined ? patch.valor_hora : current.valor_hora,
+    patch.valor_dia !== undefined ? patch.valor_dia : current.valor_dia,
+    patch.fecha_ingreso !== undefined ? patch.fecha_ingreso : current.fecha_ingreso,
     id
   );
 }
@@ -1288,6 +1613,15 @@ function horaAMinutos(hora: string): number {
   return h * 60 + m;
 }
 
+// Suma (o resta) días a una fecha ISO (YYYY-MM-DD) en UTC puro, sin tocar
+// hora ni zona horaria — usada para desplazar fechas de calendario en los
+// cálculos de ausencias/horas pactadas.
+function addDiasISO(fechaISO: string, dias: number): string {
+  const d = new Date(`${fechaISO}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + dias);
+  return d.toISOString().slice(0, 10);
+}
+
 export interface CumplimientoRow {
   nombre: string;
   sucursal_nombre: string;
@@ -1301,6 +1635,13 @@ export interface CumplimientoRow {
   en_curso: boolean;
   estado: "a_horario" | "tarde" | "salida_anticipada" | "tarde_y_anticipada" | "sin_horario";
   tolerancia_aplicada: number | null;
+  // Identifican qué horario_empleado cubrió este turno y qué fecha de
+  // calendario tenía pactada ese horario (puede diferir de `fecha` en turnos
+  // nocturnos, donde el empleado marca entrada después de medianoche).
+  // null cuando estado === "sin_horario". Usado por calcularAusencias para
+  // saber qué franjas pactadas ya están cubiertas por un turno real.
+  horario_id: number | null;
+  fecha_esperada: string | null;
 }
 
 export function calcularCumplimiento(filters?: {
@@ -1313,12 +1654,13 @@ export function calcularCumplimiento(filters?: {
   const turnos = calcularHorasTrabajadas(filters);
   const horarios = db
     .prepare(
-      `SELECT e.nombre AS empleado_nombre,
+      `SELECT h.id AS horario_id, e.nombre AS empleado_nombre,
               h.dia_semana, h.hora_inicio, h.hora_fin, h.tolerancia_min
        FROM horarios_empleado h
        JOIN empleados e ON e.id = h.empleado_id`
     )
     .all() as {
+    horario_id: number;
     empleado_nombre: string;
     dia_semana: number;
     hora_inicio: string;
@@ -1326,11 +1668,16 @@ export function calcularCumplimiento(filters?: {
     tolerancia_min: number | null;
   }[];
 
+  // Agrupado una sola vez por empleado — evita recorrer TODOS los horarios de
+  // la empresa por cada turno (antes era O(turnos × horarios); ahora cada
+  // turno solo filtra la lista, ya chica, de su propio empleado).
+  const horariosPorEmpleado = groupBy(horarios, (h) => normKey(h.empleado_nombre));
+
   return turnos.map((t): CumplimientoRow => {
     const dia = diaSemanaAR(t.entrada_at);
     const diaAnterior = (dia + 6) % 7;
     const enCurso = t.salida_at === null;
-    const empleadoNombre = t.nombre.trim().toLowerCase();
+    const horariosEmp = horariosPorEmpleado.get(normKey(t.nombre)) ?? [];
     const entradaMin = minutosDelDia(t.entrada_at);
 
     // Compara solo empleado + día + hora — la sucursal donde marcó no importa
@@ -1343,16 +1690,11 @@ export function calcularCumplimiento(filters?: {
     // igual hay que poder emparejarlo con el turno nocturno de AYER — para
     // eso se suman 1440 min al comparar, y se toma el candidato (de hoy o de
     // ayer) más cercano a la hora real de entrada.
-    const candidatosHoy = horarios
-      .filter((h) => h.empleado_nombre.trim().toLowerCase() === empleadoNombre && h.dia_semana === dia)
+    const candidatosHoy = horariosEmp
+      .filter((h) => h.dia_semana === dia)
       .map((h) => ({ h, diff: entradaMin - horaAMinutos(h.hora_inicio) }));
-    const candidatosAyerNocturno = horarios
-      .filter(
-        (h) =>
-          h.empleado_nombre.trim().toLowerCase() === empleadoNombre &&
-          h.dia_semana === diaAnterior &&
-          horaAMinutos(h.hora_fin) <= horaAMinutos(h.hora_inicio)
-      )
+    const candidatosAyerNocturno = horariosEmp
+      .filter((h) => h.dia_semana === diaAnterior && horaAMinutos(h.hora_fin) <= horaAMinutos(h.hora_inicio))
       .map((h) => ({ h, diff: entradaMin + 1440 - horaAMinutos(h.hora_inicio) }));
     const candidatos = [...candidatosHoy, ...candidatosAyerNocturno];
 
@@ -1370,6 +1712,8 @@ export function calcularCumplimiento(filters?: {
         en_curso: enCurso,
         estado: "sin_horario",
         tolerancia_aplicada: null,
+        horario_id: null,
+        fecha_esperada: null,
       };
     }
 
@@ -1392,10 +1736,17 @@ export function calcularCumplimiento(filters?: {
     const estado: CumplimientoRow["estado"] =
       tarde && anticipada ? "tarde_y_anticipada" : tarde ? "tarde" : anticipada ? "salida_anticipada" : "a_horario";
 
+    const fechaTurno = fechaAR(t.entrada_at);
+    // Si matcheó por la rama "hoy" (horario.dia_semana === dia), la fecha
+    // pactada es la misma del turno. Si matcheó por la rama nocturna
+    // (horario.dia_semana === diaAnterior), el horario arrancaba el día
+    // anterior al calendario en que el empleado terminó marcando entrada.
+    const fechaEsperada = horario.dia_semana === dia ? fechaTurno : addDiasISO(fechaTurno, -1);
+
     return {
       nombre: t.nombre,
       sucursal_nombre: t.sucursal_nombre,
-      fecha: fechaAR(t.entrada_at),
+      fecha: fechaTurno,
       entrada_real: t.entrada_at,
       entrada_esperada: horario.hora_inicio,
       diff_entrada_min: diffEntrada,
@@ -1405,8 +1756,567 @@ export function calcularCumplimiento(filters?: {
       en_curso: enCurso,
       estado,
       tolerancia_aplicada: tolerancia,
+      horario_id: horario.horario_id,
+      fecha_esperada: fechaEsperada,
     };
   });
+}
+
+// ── Ausencias ─────────────────────────────────────────────────────────────
+// calcularCumplimiento solo recorre turnos que sí existen (nunca detecta
+// "no vino"). Para eso hay que enumerar los turnos ESPERADOS (horario
+// pactado × cada fecha del rango que cae en ese día de semana) y restar los
+// que ya están cubiertos por un turno real (mismo empleado + horario_id +
+// fecha_esperada que calcularCumplimiento).
+
+function normKey(s: string): string {
+  return s.trim().toLowerCase();
+}
+
+// Agrupa un array por clave una sola vez, para reemplazar `.filter()` repetido
+// sobre el mismo array dentro de un `.map()` por cada empleado (O(n×m) → O(n+m)).
+function groupBy<T>(rows: T[], keyFn: (row: T) => string): Map<string, T[]> {
+  const map = new Map<string, T[]>();
+  for (const row of rows) {
+    const key = keyFn(row);
+    const list = map.get(key);
+    if (list) list.push(row);
+    else map.set(key, [row]);
+  }
+  return map;
+}
+
+// Un turno partido genera una fila de AusenciaRow por horario_id faltado —
+// para contar "días de ausencia" hay que deduplicar por fecha de calendario.
+function diasUnicos(rows: AusenciaRow[]): number {
+  return new Set(rows.map((r) => r.fecha)).size;
+}
+
+function duracionHorarioHoras(horaInicio: string, horaFin: string): number {
+  const inicio = horaAMinutos(horaInicio);
+  let fin = horaAMinutos(horaFin);
+  if (fin <= inicio) fin += 24 * 60; // turno nocturno: cruza medianoche
+  return (fin - inicio) / 60;
+}
+
+export interface AusenciaRow {
+  empleado_nombre: string;
+  fecha: string;
+  hora_inicio: string;
+  hora_fin: string;
+  horas: number;
+  // true si ese día cae dentro de un aviso de RRHH confirmado por el
+  // empleado (Enfermedad / Motivo Personal / Vacaciones) — ver
+  // ausencias_reportadas. No se descuenta de la liquidación.
+  justificada: boolean;
+}
+
+export function calcularAusencias(filters: { desde: string; hasta: string; nombres?: string[] }): AusenciaRow[] {
+  const cumplimiento = calcularCumplimiento(filters);
+  const cubiertos = new Set(
+    cumplimiento
+      .filter((c) => c.horario_id !== null)
+      .map((c) => `${normKey(c.nombre)}|${c.horario_id}|${c.fecha_esperada}`)
+  );
+
+  let query = `
+    SELECT h.id AS horario_id, h.dia_semana, h.hora_inicio, h.hora_fin, e.nombre AS empleado_nombre
+    FROM horarios_empleado h
+    JOIN empleados e ON e.id = h.empleado_id
+    WHERE e.activo = 1
+  `;
+  const params: string[] = [];
+  if (filters.nombres && filters.nombres.length > 0) {
+    query += ` AND e.nombre IN (${filters.nombres.map(() => "?").join(",")})`;
+    params.push(...filters.nombres);
+  }
+  const horarios = db.prepare(query).all(...params) as {
+    horario_id: number;
+    dia_semana: number;
+    hora_inicio: string;
+    hora_fin: string;
+    empleado_nombre: string;
+  }[];
+
+  const reportadas = getAusenciasReportadas(filters.desde, filters.hasta);
+  const rangosPorEmpleado = new Map<string, { fecha_inicio: string; fecha_fin: string }[]>();
+  for (const r of reportadas) {
+    const key = normKey(r.empleado_nombre);
+    if (!rangosPorEmpleado.has(key)) rangosPorEmpleado.set(key, []);
+    rangosPorEmpleado.get(key)!.push({ fecha_inicio: r.fecha_inicio, fecha_fin: r.fecha_fin });
+  }
+  function esJustificada(empleadoNombre: string, fecha: string): boolean {
+    const rangos = rangosPorEmpleado.get(normKey(empleadoNombre));
+    return !!rangos?.some((r) => fecha >= r.fecha_inicio && fecha <= r.fecha_fin);
+  }
+
+  // No contar como ausencia un turno de HOY que todavía no arrancó — si no,
+  // liquidación mal marca "faltó" a alguien cuyo turno es más tarde en el día.
+  const ahoraSec = Math.floor(Date.now() / 1000);
+  const hoyAR = fechaAR(ahoraSec);
+  const minutosAhoraAR = minutosDelDia(ahoraSec);
+
+  const ausencias: AusenciaRow[] = [];
+  for (let fecha = filters.desde; fecha <= filters.hasta; fecha = addDiasISO(fecha, 1)) {
+    if (fecha > hoyAR) continue;
+    const dia = new Date(`${fecha}T00:00:00Z`).getUTCDay();
+    for (const h of horarios) {
+      if (h.dia_semana !== dia) continue;
+      if (fecha === hoyAR && horaAMinutos(h.hora_inicio) > minutosAhoraAR) continue;
+      const key = `${normKey(h.empleado_nombre)}|${h.horario_id}|${fecha}`;
+      if (cubiertos.has(key)) continue;
+      ausencias.push({
+        empleado_nombre: h.empleado_nombre,
+        fecha,
+        hora_inicio: h.hora_inicio,
+        hora_fin: h.hora_fin,
+        horas: duracionHorarioHoras(h.hora_inicio, h.hora_fin),
+        justificada: esJustificada(h.empleado_nombre, fecha),
+      });
+    }
+  }
+  return ausencias;
+}
+
+// ── Liquidación de sueldos ───────────────────────────────────────────────
+// Cálculo interno simple (no reemplaza un recibo de sueldo legal): sin
+// horas extra, sin aportes/ganancias/SAC. Empleados "por hora" cobran las
+// horas efectivamente trabajadas (calcularHorasTrabajadas). Empleados
+// "mensual" cobran el fijo, con descuentos proporcionales por tardanzas /
+// salidas anticipadas (calcularCumplimiento) y por ausencias completas
+// (calcularAusencias), traducidos a dinero con un valor-hora equivalente =
+// sueldo_mensual / horas pactadas en el período elegido.
+
+export interface LiquidacionEmpleado {
+  empleado_id: number;
+  nombre: string;
+  tipo_pago: "mensual" | "hora" | "dia" | null;
+  sueldo_mensual: number | null;
+  valor_hora: number | null;
+  valor_dia: number | null; // solo tipo 'dia'
+  horas_trabajadas: number | null; // tipo 'hora' y 'dia'
+  horas_en_curso: boolean; // hay turnos sin cerrar (tipo 'hora' y 'dia')
+  horas_pactadas: number | null; // solo tipo 'mensual'
+  valor_hora_equivalente: number | null; // solo tipo 'mensual'
+  minutos_perdidos: number; // tardanza + salida anticipada, solo mensual
+  descuento_tardanza: number;
+  dias_ausencia: number; // ausencias SIN aviso de RRHH (se descuentan; en 'dia' solo informativo)
+  horas_ausencia: number;
+  descuento_ausencia: number;
+  dias_ausencia_justificada: number; // ausencias CON aviso de RRHH confirmado (no se descuentan)
+  horas_ausencia_justificada: number;
+  dias_trabajados: number | null; // solo tipo 'dia', con horario cargado
+  horas_extra: number | null; // solo tipo 'dia', con horario cargado: horas por encima de lo pactado ese día
+  total_por_horas: number | null; // horas_trabajadas × valor_hora — referencia para comparar contra 'total' (mensual y dia)
+  total: number;
+  advertencias: string[];
+}
+
+function contarOcurrenciasDia(desde: string, hasta: string, diaSemana: number): number {
+  let count = 0;
+  for (let fecha = desde; fecha <= hasta; fecha = addDiasISO(fecha, 1)) {
+    if (new Date(`${fecha}T00:00:00Z`).getUTCDay() === diaSemana) count++;
+  }
+  return count;
+}
+
+function formatARSSimple(n: number): string {
+  return `$${Math.round(n).toLocaleString("es-AR")}`;
+}
+
+// Compara el total ya calculado (sueldo fijo mensual, o jornal por día)
+// contra lo que cobraría si se le pagara estrictamente por horas trabajadas ×
+// valor_hora, y agrega una advertencia si hay diferencia — para que el admin
+// vea rápido si el sueldo fijo está pagando de más o de menos respecto al
+// valor hora cargado. Devuelve `total_por_horas` (o null sin valor_hora).
+function compararConValorHora(
+  total: number,
+  horasTrabajadas: number,
+  valorHora: number | null,
+  advertencias: string[]
+): number | null {
+  if (!valorHora) return null;
+  const totalPorHoras = horasTrabajadas * valorHora;
+  const diff = total - totalPorHoras;
+  if (Math.abs(diff) > 1) {
+    advertencias.push(
+      diff > 0
+        ? `Cobra ${formatARSSimple(diff)} más que si se le pagara por hora trabajada (equivaldría a ${formatARSSimple(totalPorHoras)})`
+        : `Cobra ${formatARSSimple(Math.abs(diff))} menos que si se le pagara por hora trabajada (equivaldría a ${formatARSSimple(totalPorHoras)})`
+    );
+  }
+  return totalPorHoras;
+}
+
+export function calcularLiquidacion(filters: { desde: string; hasta: string; nombres?: string[] }): LiquidacionEmpleado[] {
+  const empleados = listEmpleados().filter(
+    (e) => e.activo && (!filters.nombres || filters.nombres.length === 0 || filters.nombres.includes(e.nombre))
+  );
+  const turnos = calcularHorasTrabajadas(filters);
+  const cumplimiento = calcularCumplimiento(filters);
+  const ausencias = calcularAusencias(filters);
+  const horarios = listHorarios();
+
+  // Agrupado una sola vez por empleado — evita recorrer estos 4 arrays
+  // completos (de TODO el período/toda la empresa) dentro del `.map()` de
+  // abajo por cada empleado (antes era O(empleados × filas); ahora cada
+  // empleado hace un lookup O(1) a su propia lista, ya chica).
+  const turnosPorEmpleado = groupBy(turnos, (t) => normKey(t.nombre));
+  const horariosPorEmpleado = groupBy(horarios, (h) => normKey(h.empleado_nombre));
+  const cumplimientoPorEmpleado = groupBy(cumplimiento, (c) => normKey(c.nombre));
+  const ausenciasPorEmpleado = groupBy(ausencias, (a) => normKey(a.empleado_nombre));
+
+  const ocurrenciasPorDia = new Map<number, number>();
+  function ocurrencias(dia: number): number {
+    if (!ocurrenciasPorDia.has(dia)) {
+      ocurrenciasPorDia.set(dia, contarOcurrenciasDia(filters.desde, filters.hasta, dia));
+    }
+    return ocurrenciasPorDia.get(dia)!;
+  }
+
+  return empleados.map((emp): LiquidacionEmpleado => {
+    const advertencias: string[] = [];
+    const key = normKey(emp.nombre);
+
+    if (emp.tipo_pago === "hora") {
+      const turnosEmp = turnosPorEmpleado.get(key) ?? [];
+      const horasTrabajadas = turnosEmp.filter((t) => t.horas !== null).reduce((acc, t) => acc + (t.horas ?? 0), 0);
+      const horasEnCurso = turnosEmp.some((t) => t.horas === null);
+      if (!emp.valor_hora) advertencias.push("Sin valor hora configurado");
+      return {
+        empleado_id: emp.id,
+        nombre: emp.nombre,
+        tipo_pago: "hora",
+        sueldo_mensual: null,
+        valor_hora: emp.valor_hora,
+        valor_dia: null,
+        horas_trabajadas: horasTrabajadas,
+        horas_en_curso: horasEnCurso,
+        horas_pactadas: null,
+        valor_hora_equivalente: null,
+        minutos_perdidos: 0,
+        descuento_tardanza: 0,
+        dias_ausencia: 0,
+        horas_ausencia: 0,
+        descuento_ausencia: 0,
+        dias_ausencia_justificada: 0,
+        horas_ausencia_justificada: 0,
+        dias_trabajados: null,
+        horas_extra: null,
+        total_por_horas: horasTrabajadas * (emp.valor_hora ?? 0),
+        total: horasTrabajadas * (emp.valor_hora ?? 0),
+        advertencias,
+      };
+    }
+
+    if (emp.tipo_pago === "dia") {
+      const horariosEmp = horariosPorEmpleado.get(key) ?? [];
+      const turnosEmp = turnosPorEmpleado.get(key) ?? [];
+      const turnosCerrados = turnosEmp.filter((t) => t.horas !== null);
+      const horasEnCurso = turnosEmp.some((t) => t.horas === null);
+      const horasTrabajadasTotal = turnosCerrados.reduce((acc, t) => acc + (t.horas ?? 0), 0);
+
+      if (!emp.valor_dia) advertencias.push("Sin valor por día configurado");
+      if (!emp.valor_hora) advertencias.push("Sin valor hora configurado (necesario para horas extra)");
+
+      // Sin ningún horario cargado no hay forma de saber qué es "jornal normal"
+      // vs "hora extra" — se paga directo por hora trabajada, como tipo 'hora'.
+      if (horariosEmp.length === 0) {
+        return {
+          empleado_id: emp.id,
+          nombre: emp.nombre,
+          tipo_pago: "dia",
+          sueldo_mensual: null,
+          valor_hora: emp.valor_hora,
+          valor_dia: emp.valor_dia,
+          horas_trabajadas: horasTrabajadasTotal,
+          horas_en_curso: horasEnCurso,
+          horas_pactadas: null,
+          valor_hora_equivalente: null,
+          minutos_perdidos: 0,
+          descuento_tardanza: 0,
+          dias_ausencia: 0,
+          horas_ausencia: 0,
+          descuento_ausencia: 0,
+          dias_ausencia_justificada: 0,
+          horas_ausencia_justificada: 0,
+          dias_trabajados: null,
+          horas_extra: null,
+          total_por_horas: horasTrabajadasTotal * (emp.valor_hora ?? 0),
+          total: horasTrabajadasTotal * (emp.valor_hora ?? 0),
+          advertencias,
+        };
+      }
+
+      // Con horario cargado: por cada día efectivamente trabajado que coincide
+      // con un día de semana pactado, un jornal (valor_dia) + lo que exceda las
+      // horas pactadas ESE día, a valor hora (sin recargo). Un día trabajado que
+      // no coincide con ningún día de semana pactado (ej. cubrió un turno
+      // suelto) se paga directo por hora, sin jornal.
+      const horasPactadasPorDiaSemana = new Map<number, number>();
+      for (const h of horariosEmp) {
+        horasPactadasPorDiaSemana.set(
+          h.dia_semana,
+          (horasPactadasPorDiaSemana.get(h.dia_semana) ?? 0) + duracionHorarioHoras(h.hora_inicio, h.hora_fin)
+        );
+      }
+
+      const horasPorFecha = new Map<string, number>();
+      for (const t of turnosCerrados) {
+        const fecha = fechaAR(t.entrada_at);
+        horasPorFecha.set(fecha, (horasPorFecha.get(fecha) ?? 0) + (t.horas ?? 0));
+      }
+
+      let diasTrabajados = 0;
+      let horasExtra = 0;
+      let total = 0;
+      for (const [fecha, horasDia] of horasPorFecha) {
+        const diaSemana = new Date(`${fecha}T00:00:00Z`).getUTCDay();
+        const horasPactadasDia = horasPactadasPorDiaSemana.get(diaSemana) ?? 0;
+        if (horasPactadasDia > 0) {
+          diasTrabajados += 1;
+          const extra = Math.max(0, horasDia - horasPactadasDia);
+          horasExtra += extra;
+          total += (emp.valor_dia ?? 0) + extra * (emp.valor_hora ?? 0);
+        } else {
+          total += horasDia * (emp.valor_hora ?? 0);
+        }
+      }
+
+      const ausenciasEmp = ausenciasPorEmpleado.get(key) ?? [];
+      const ausenciasInjustificadas = ausenciasEmp.filter((a) => !a.justificada);
+      const ausenciasJustificadas = ausenciasEmp.filter((a) => a.justificada);
+
+      const totalPorHoras = compararConValorHora(total, horasTrabajadasTotal, emp.valor_hora, advertencias);
+
+      return {
+        empleado_id: emp.id,
+        nombre: emp.nombre,
+        tipo_pago: "dia",
+        sueldo_mensual: null,
+        valor_hora: emp.valor_hora,
+        valor_dia: emp.valor_dia,
+        horas_trabajadas: horasTrabajadasTotal,
+        horas_en_curso: horasEnCurso,
+        horas_pactadas: null,
+        valor_hora_equivalente: null,
+        minutos_perdidos: 0,
+        descuento_tardanza: 0,
+        dias_ausencia: diasUnicos(ausenciasInjustificadas),
+        horas_ausencia: ausenciasInjustificadas.reduce((acc, a) => acc + a.horas, 0),
+        descuento_ausencia: 0, // "por día" no tiene una base fija de la cual descontar
+        dias_ausencia_justificada: diasUnicos(ausenciasJustificadas),
+        horas_ausencia_justificada: ausenciasJustificadas.reduce((acc, a) => acc + a.horas, 0),
+        dias_trabajados: diasTrabajados,
+        horas_extra: horasExtra,
+        total_por_horas: totalPorHoras,
+        total,
+        advertencias,
+      };
+    }
+
+    if (emp.tipo_pago === "mensual") {
+      const horariosEmp = horariosPorEmpleado.get(key) ?? [];
+      const horasPactadas = horariosEmp.reduce(
+        (acc, h) => acc + ocurrencias(h.dia_semana) * duracionHorarioHoras(h.hora_inicio, h.hora_fin),
+        0
+      );
+      const valorHoraEquivalente = horasPactadas > 0 && emp.sueldo_mensual ? emp.sueldo_mensual / horasPactadas : null;
+
+      const cRows = cumplimientoPorEmpleado.get(key) ?? [];
+      let minutosPerdidos = 0;
+      for (const c of cRows) {
+        if (c.estado === "tarde" || c.estado === "tarde_y_anticipada") minutosPerdidos += c.diff_entrada_min ?? 0;
+        if (c.estado === "salida_anticipada" || c.estado === "tarde_y_anticipada") minutosPerdidos += c.diff_salida_min ?? 0;
+      }
+      const descuentoTardanza = valorHoraEquivalente ? (minutosPerdidos / 60) * valorHoraEquivalente : 0;
+
+      const ausenciasEmp = ausenciasPorEmpleado.get(key) ?? [];
+      const ausenciasInjustificadas = ausenciasEmp.filter((a) => !a.justificada);
+      const ausenciasJustificadas = ausenciasEmp.filter((a) => a.justificada);
+      const horasAusencia = ausenciasInjustificadas.reduce((acc, a) => acc + a.horas, 0);
+      const horasAusenciaJustificada = ausenciasJustificadas.reduce((acc, a) => acc + a.horas, 0);
+      const descuentoAusencia = valorHoraEquivalente ? horasAusencia * valorHoraEquivalente : 0;
+
+      const turnosEmp = turnosPorEmpleado.get(key) ?? [];
+      const horasTrabajadas = turnosEmp.filter((t) => t.horas !== null).reduce((acc, t) => acc + (t.horas ?? 0), 0);
+      const horasEnCurso = turnosEmp.some((t) => t.horas === null);
+
+      if (!emp.sueldo_mensual) advertencias.push("Sin sueldo mensual configurado");
+      if (horasPactadas === 0) advertencias.push("Sin horario cargado — no se pueden calcular descuentos");
+      if (!emp.valor_hora) advertencias.push("Sin valor hora configurado (no se puede comparar contra horas trabajadas)");
+
+      const total = (emp.sueldo_mensual ?? 0) - descuentoTardanza - descuentoAusencia;
+      const totalPorHoras = compararConValorHora(total, horasTrabajadas, emp.valor_hora, advertencias);
+
+      return {
+        empleado_id: emp.id,
+        nombre: emp.nombre,
+        tipo_pago: "mensual",
+        sueldo_mensual: emp.sueldo_mensual,
+        valor_hora: emp.valor_hora,
+        valor_dia: null,
+        horas_trabajadas: horasTrabajadas,
+        horas_en_curso: horasEnCurso,
+        horas_pactadas: horasPactadas,
+        valor_hora_equivalente: valorHoraEquivalente,
+        minutos_perdidos: minutosPerdidos,
+        descuento_tardanza: descuentoTardanza,
+        dias_ausencia: diasUnicos(ausenciasInjustificadas),
+        horas_ausencia: horasAusencia,
+        descuento_ausencia: descuentoAusencia,
+        dias_ausencia_justificada: diasUnicos(ausenciasJustificadas),
+        horas_ausencia_justificada: horasAusenciaJustificada,
+        dias_trabajados: null,
+        horas_extra: null,
+        total_por_horas: totalPorHoras,
+        total,
+        advertencias,
+      };
+    }
+
+    advertencias.push("Sin tipo de pago configurado");
+    return {
+      empleado_id: emp.id,
+      nombre: emp.nombre,
+      tipo_pago: null,
+      sueldo_mensual: emp.sueldo_mensual,
+      valor_hora: emp.valor_hora,
+      valor_dia: emp.valor_dia,
+      horas_trabajadas: null,
+      horas_en_curso: false,
+      horas_pactadas: null,
+      valor_hora_equivalente: null,
+      minutos_perdidos: 0,
+      descuento_tardanza: 0,
+      dias_ausencia: 0,
+      horas_ausencia: 0,
+      descuento_ausencia: 0,
+      dias_ausencia_justificada: 0,
+      horas_ausencia_justificada: 0,
+      dias_trabajados: null,
+      horas_extra: null,
+      total_por_horas: null,
+      total: 0,
+      advertencias,
+    };
+  });
+}
+
+// ── Saldo de vacaciones ──────────────────────────────────────────────────────
+// Cálculo aproximado según la Ley de Contrato de Trabajo argentina (art. 150):
+// días asignados por año según antigüedad al 31/12 de ese año. No reemplaza
+// un cálculo legal formal (mismo disclaimer que calcularLiquidacion) — sirve
+// para que RRHH tenga una referencia rápida en el dashboard.
+
+function añosCompletos(desdeISO: string, hastaISO: string): number {
+  const d1 = new Date(`${desdeISO}T00:00:00Z`);
+  const d2 = new Date(`${hastaISO}T00:00:00Z`);
+  let anios = d2.getUTCFullYear() - d1.getUTCFullYear();
+  const cumplioAniversario =
+    d2.getUTCMonth() > d1.getUTCMonth() ||
+    (d2.getUTCMonth() === d1.getUTCMonth() && d2.getUTCDate() >= d1.getUTCDate());
+  if (!cumplioAniversario) anios -= 1;
+  return Math.max(0, anios);
+}
+
+function diasVacacionesLey(antiguedadAnios: number): number {
+  if (antiguedadAnios >= 20) return 35;
+  if (antiguedadAnios >= 10) return 28;
+  if (antiguedadAnios >= 5) return 21;
+  return 14;
+}
+
+function diasEntreISO(desdeISO: string, hastaISO: string): number {
+  return Math.round((Date.parse(`${hastaISO}T00:00:00Z`) - Date.parse(`${desdeISO}T00:00:00Z`)) / 86400000) + 1;
+}
+
+export interface SaldoVacacionesEmpleado {
+  empleado_id: number;
+  nombre: string;
+  fecha_ingreso: string | null;
+  antiguedad_anios: number | null;
+  dias_asignados: number | null;
+  dias_usados: number;
+  saldo: number | null;
+  advertencia: string | null;
+}
+
+export function calcularSaldoVacaciones(anio?: number): SaldoVacacionesEmpleado[] {
+  const anioObjetivo = anio ?? Number(fechaAR(Math.floor(Date.now() / 1000)).slice(0, 4));
+  const inicioAnio = `${anioObjetivo}-01-01`;
+  const finAnio = `${anioObjetivo}-12-31`;
+
+  const vacacionesRows = db
+    .prepare(
+      `SELECT empleado_nombre, fecha_inicio, fecha_fin FROM ausencias_reportadas
+       WHERE categoria = 'Vacaciones' AND fecha_inicio <= ? AND fecha_fin >= ?`
+    )
+    .all(finAnio, inicioAnio) as { empleado_nombre: string; fecha_inicio: string; fecha_fin: string }[];
+
+  const usadosPorEmpleado = new Map<string, number>();
+  for (const r of vacacionesRows) {
+    const desdeClip = r.fecha_inicio < inicioAnio ? inicioAnio : r.fecha_inicio;
+    const hastaClip = r.fecha_fin > finAnio ? finAnio : r.fecha_fin;
+    const key = normKey(r.empleado_nombre);
+    usadosPorEmpleado.set(key, (usadosPorEmpleado.get(key) ?? 0) + diasEntreISO(desdeClip, hastaClip));
+  }
+
+  return listEmpleados()
+    .filter((e) => e.activo)
+    .map((emp): SaldoVacacionesEmpleado => {
+      const diasUsados = usadosPorEmpleado.get(normKey(emp.nombre)) ?? 0;
+
+      if (!emp.fecha_ingreso) {
+        return {
+          empleado_id: emp.id,
+          nombre: emp.nombre,
+          fecha_ingreso: null,
+          antiguedad_anios: null,
+          dias_asignados: null,
+          dias_usados: diasUsados,
+          saldo: null,
+          advertencia: "Sin fecha de ingreso configurada",
+        };
+      }
+
+      if (emp.fecha_ingreso > finAnio) {
+        // Todavía no había ingresado durante ese año.
+        return {
+          empleado_id: emp.id,
+          nombre: emp.nombre,
+          fecha_ingreso: emp.fecha_ingreso,
+          antiguedad_anios: 0,
+          dias_asignados: 0,
+          dias_usados: diasUsados,
+          saldo: -diasUsados,
+          advertencia: null,
+        };
+      }
+
+      const ingresoEnEsteAnio = emp.fecha_ingreso.slice(0, 4) === String(anioObjetivo);
+      let antiguedadAnios: number;
+      let diasAsignados: number;
+      if (ingresoEnEsteAnio) {
+        // Primer año: proporcional, 1 día cada 20 trabajados (LCT art. 153).
+        antiguedadAnios = 0;
+        diasAsignados = Math.floor(diasEntreISO(emp.fecha_ingreso, finAnio) / 20);
+      } else {
+        antiguedadAnios = añosCompletos(emp.fecha_ingreso, finAnio);
+        diasAsignados = diasVacacionesLey(antiguedadAnios);
+      }
+
+      return {
+        empleado_id: emp.id,
+        nombre: emp.nombre,
+        fecha_ingreso: emp.fecha_ingreso,
+        antiguedad_anios: antiguedadAnios,
+        dias_asignados: diasAsignados,
+        dias_usados: diasUsados,
+        saldo: diasAsignados - diasUsados,
+        advertencia: null,
+      };
+    });
 }
 
 export default db;

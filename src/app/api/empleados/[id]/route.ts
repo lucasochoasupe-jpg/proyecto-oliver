@@ -5,7 +5,16 @@ export const dynamic = "force-dynamic";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const body = (await req.json()) as { nombre?: string; celular?: string | null; activo?: number };
+  const body = (await req.json()) as {
+    nombre?: string;
+    celular?: string | null;
+    activo?: number;
+    tipo_pago?: "mensual" | "hora" | "dia" | null;
+    sueldo_mensual?: number | null;
+    valor_hora?: number | null;
+    valor_dia?: number | null;
+    fecha_ingreso?: string | null;
+  };
   updateEmpleado(Number(id), body);
   return NextResponse.json({ ok: true });
 }

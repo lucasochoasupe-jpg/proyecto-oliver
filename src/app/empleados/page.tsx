@@ -9,16 +9,50 @@ interface Empleado {
   celular: string | null;
   jid: string | null;
   activo: number;
+  tipo_pago: "mensual" | "hora" | "dia" | null;
+  sueldo_mensual: number | null;
+  valor_hora: number | null;
+  valor_dia: number | null;
+  fecha_ingreso: string | null;
+}
+
+interface SaldoVacaciones {
+  empleado_id: number;
+  nombre: string;
+  fecha_ingreso: string | null;
+  antiguedad_anios: number | null;
+  dias_asignados: number | null;
+  dias_usados: number;
+  saldo: number | null;
+  advertencia: string | null;
+}
+
+function formatMoneda(n: number) {
+  return n.toLocaleString("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 });
 }
 
 export default function EmpleadosPage() {
   const [empleados, setEmpleados] = useState<Empleado[]>([]);
+  const [saldos, setSaldos] = useState<Record<number, SaldoVacaciones>>({});
   const [loading, setLoading] = useState(true);
   const [busqueda, setBusqueda] = useState("");
   const [soloActivos, setSoloActivos] = useState(true);
 
   // Estado de edición inline
-  const [editando, setEditando] = useState<Record<number, { nombre: string; celular: string }>>({});
+  const [editando, setEditando] = useState<
+    Record<
+      number,
+      {
+        nombre: string;
+        celular: string;
+        tipo_pago: string;
+        sueldo_mensual: string;
+        valor_hora: string;
+        valor_dia: string;
+        fecha_ingreso: string;
+      }
+    >
+  >({});
   const [guardando, setGuardando] = useState<number | null>(null);
   const [guardado, setGuardado] = useState<number | null>(null);
 
@@ -33,16 +67,29 @@ export default function EmpleadosPage() {
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
 
   const fetchData = useCallback(async () => {
-    const res = await fetch("/api/empleados");
+    const [res, resSaldos] = await Promise.all([fetch("/api/empleados"), fetch("/api/vacaciones")]);
     const data = (await res.json()) as Empleado[];
+    const saldosData = (await resSaldos.json()) as SaldoVacaciones[];
     setEmpleados(data);
+    setSaldos(Object.fromEntries(saldosData.map((s) => [s.empleado_id, s])));
     setLoading(false);
   }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
   function startEdit(e: Empleado) {
-    setEditando((prev) => ({ ...prev, [e.id]: { nombre: e.nombre, celular: e.celular ?? "" } }));
+    setEditando((prev) => ({
+      ...prev,
+      [e.id]: {
+        nombre: e.nombre,
+        celular: e.celular ?? "",
+        tipo_pago: e.tipo_pago ?? "",
+        sueldo_mensual: e.sueldo_mensual !== null ? String(e.sueldo_mensual) : "",
+        valor_hora: e.valor_hora !== null ? String(e.valor_hora) : "",
+        valor_dia: e.valor_dia !== null ? String(e.valor_dia) : "",
+        fecha_ingreso: e.fecha_ingreso ?? "",
+      },
+    }));
   }
 
   function cancelEdit(id: number) {
@@ -56,13 +103,21 @@ export default function EmpleadosPage() {
     await fetch(`/api/empleados/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ nombre: e.nombre.trim(), celular: e.celular.trim() || null }),
+      body: JSON.stringify({
+        nombre: e.nombre.trim(),
+        celular: e.celular.trim() || null,
+        tipo_pago: e.tipo_pago || null,
+        sueldo_mensual: e.tipo_pago === "mensual" && e.sueldo_mensual.trim() ? Number(e.sueldo_mensual) : null,
+        valor_hora: e.tipo_pago && e.valor_hora.trim() ? Number(e.valor_hora) : null,
+        valor_dia: e.tipo_pago === "dia" && e.valor_dia.trim() ? Number(e.valor_dia) : null,
+        fecha_ingreso: e.fecha_ingreso.trim() || null,
+      }),
     });
+    await fetchData();
     setGuardando(null);
     setGuardado(id);
     setTimeout(() => setGuardado(null), 2000);
     cancelEdit(id);
-    fetchData();
   }
 
   async function toggleActivo(emp: Empleado) {
@@ -127,7 +182,7 @@ export default function EmpleadosPage() {
       <PageHeader subtitle="Gestión de Empleados" />
 
       <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
             <h1 className="text-xl font-bold text-[#2C1810]">Empleados</h1>
             <p className="text-sm text-[#8B6347] mt-0.5">
@@ -225,12 +280,16 @@ export default function EmpleadosPage() {
           ) : filtrados.length === 0 ? (
             <div className="text-center py-16 text-[#8B6347] text-sm">No hay empleados que coincidan.</div>
           ) : (
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[1150px] responsive-table">
               <thead>
                 <tr className="border-b border-[#EDE0CC] bg-[#FAF7F2]">
                   <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Nombre y Apellido</th>
                   <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Celular</th>
+                  <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Ingreso</th>
                   <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">WhatsApp</th>
+                  <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Pago</th>
+                  <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Vacaciones</th>
                   <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Estado</th>
                   <th className="px-4 py-3"></th>
                 </tr>
@@ -244,7 +303,7 @@ export default function EmpleadosPage() {
                       key={emp.id}
                       className={`border-b border-[#EDE0CC] hover:bg-[#FAF7F2] transition-colors ${i % 2 === 0 ? "" : "bg-[#FDFAF6]"} ${!emp.activo ? "opacity-50" : ""}`}
                     >
-                      <td className="px-4 py-2.5">
+                      <td className="px-4 py-2.5" data-label="Nombre y Apellido">
                         {isEditing ? (
                           <input
                             type="text"
@@ -256,7 +315,7 @@ export default function EmpleadosPage() {
                           <span className="font-medium text-[#2C1810]">{emp.nombre}</span>
                         )}
                       </td>
-                      <td className="px-4 py-2.5">
+                      <td className="px-4 py-2.5" data-label="Celular">
                         {isEditing ? (
                           <input
                             type="text"
@@ -271,7 +330,21 @@ export default function EmpleadosPage() {
                           <span className="text-amber-500 italic text-xs">Sin celular</span>
                         )}
                       </td>
-                      <td className="px-4 py-2.5">
+                      <td className="px-4 py-2.5" data-label="Ingreso">
+                        {isEditing ? (
+                          <input
+                            type="date"
+                            value={ed.fecha_ingreso}
+                            onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], fecha_ingreso: e.target.value } }))}
+                            className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none"
+                          />
+                        ) : emp.fecha_ingreso ? (
+                          <span className="text-[#2C1810]">{new Date(`${emp.fecha_ingreso}T00:00:00Z`).toLocaleDateString("es-AR", { timeZone: "UTC" })}</span>
+                        ) : (
+                          <span className="text-amber-500 italic text-xs">Sin fecha</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5" data-label="WhatsApp">
                         {emp.jid ? (
                           <div className="flex items-center gap-2">
                             <span className="text-xs bg-green-100 text-green-700 border border-green-200 px-2 py-0.5 rounded-full font-medium">Vinculado</span>
@@ -283,7 +356,109 @@ export default function EmpleadosPage() {
                           <span className="text-xs text-[#B89070] italic">Sin vincular</span>
                         )}
                       </td>
-                      <td className="px-4 py-2.5">
+                      <td className="px-4 py-2.5" data-label="Pago">
+                        {isEditing ? (
+                          <div className="flex items-center gap-1.5">
+                            <select
+                              value={ed.tipo_pago}
+                              onChange={(e) =>
+                                setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], tipo_pago: e.target.value } }))
+                              }
+                              className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none"
+                            >
+                              <option value="">—</option>
+                              <option value="mensual">Mensual</option>
+                              <option value="hora">Por hora</option>
+                              <option value="dia">Por día</option>
+                            </select>
+                            {ed.tipo_pago === "mensual" && (
+                              <>
+                                <input
+                                  type="number"
+                                  placeholder="Sueldo mensual"
+                                  value={ed.sueldo_mensual}
+                                  onChange={(e) =>
+                                    setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], sueldo_mensual: e.target.value } }))
+                                  }
+                                  className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none w-28"
+                                />
+                                <input
+                                  type="number"
+                                  placeholder="Valor hora (referencia)"
+                                  value={ed.valor_hora}
+                                  onChange={(e) =>
+                                    setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], valor_hora: e.target.value } }))
+                                  }
+                                  className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none w-32"
+                                />
+                              </>
+                            )}
+                            {ed.tipo_pago === "hora" && (
+                              <input
+                                type="number"
+                                placeholder="Valor hora"
+                                value={ed.valor_hora}
+                                onChange={(e) =>
+                                  setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], valor_hora: e.target.value } }))
+                                }
+                                className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none w-24"
+                              />
+                            )}
+                            {ed.tipo_pago === "dia" && (
+                              <>
+                                <input
+                                  type="number"
+                                  placeholder="Valor día"
+                                  value={ed.valor_dia}
+                                  onChange={(e) =>
+                                    setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], valor_dia: e.target.value } }))
+                                  }
+                                  className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none w-24"
+                                />
+                                <input
+                                  type="number"
+                                  placeholder="Valor hora (extra)"
+                                  value={ed.valor_hora}
+                                  onChange={(e) =>
+                                    setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], valor_hora: e.target.value } }))
+                                  }
+                                  className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none w-28"
+                                />
+                              </>
+                            )}
+                          </div>
+                        ) : emp.tipo_pago === "mensual" ? (
+                          <span className="text-xs text-[#2C1810]">
+                            Mensual{emp.sueldo_mensual ? ` · ${formatMoneda(emp.sueldo_mensual)}` : ""}
+                            {emp.valor_hora ? ` (ref. ${formatMoneda(emp.valor_hora)}/h)` : ""}
+                          </span>
+                        ) : emp.tipo_pago === "hora" ? (
+                          <span className="text-xs text-[#2C1810]">
+                            Por hora{emp.valor_hora ? ` · ${formatMoneda(emp.valor_hora)}` : ""}
+                          </span>
+                        ) : emp.tipo_pago === "dia" ? (
+                          <span className="text-xs text-[#2C1810]">
+                            Por día{emp.valor_dia ? ` · ${formatMoneda(emp.valor_dia)}` : ""}
+                            {emp.valor_hora ? ` (extra ${formatMoneda(emp.valor_hora)}/h)` : ""}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-[#B89070] italic">Sin definir</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5" data-label="Vacaciones">
+                        {(() => {
+                          const s = saldos[emp.id];
+                          if (!s || s.advertencia) {
+                            return <span className="text-amber-500 italic text-xs">{s?.advertencia ?? "—"}</span>;
+                          }
+                          return (
+                            <span className={`text-xs ${s.saldo !== null && s.saldo < 0 ? "text-red-500 font-medium" : "text-[#2C1810]"}`}>
+                              {s.dias_usados}/{s.dias_asignados} días
+                            </span>
+                          );
+                        })()}
+                      </td>
+                      <td className="px-4 py-2.5" data-label="Estado">
                         <button onClick={() => toggleActivo(emp)}>
                           {emp.activo ? (
                             <span className="text-xs bg-green-100 text-green-700 border border-green-200 px-2 py-0.5 rounded-full font-medium">Activo</span>
@@ -292,7 +467,7 @@ export default function EmpleadosPage() {
                           )}
                         </button>
                       </td>
-                      <td className="px-4 py-2.5">
+                      <td className="px-4 py-2.5 whitespace-nowrap">
                         <div className="flex items-center gap-3 justify-end">
                           {isEditing ? (
                             <>
@@ -336,6 +511,7 @@ export default function EmpleadosPage() {
                 })}
               </tbody>
             </table>
+            </div>
           )}
         </div>
       </div>

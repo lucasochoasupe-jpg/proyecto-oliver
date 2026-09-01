@@ -1,18 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { calcularHorasTrabajadas } from "@/lib/db";
+import { hoyISO, inicioDeMesISO } from "@/lib/date-ar";
 
 export const dynamic = "force-dynamic";
-
-const AR_TZ = "America/Argentina/Buenos_Aires";
-
-function hoyISO() {
-  return new Date().toLocaleDateString("sv", { timeZone: AR_TZ });
-}
-
-function inicioDeMesISO() {
-  const hoy = hoyISO();
-  return `${hoy.slice(0, 7)}-01`;
-}
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);

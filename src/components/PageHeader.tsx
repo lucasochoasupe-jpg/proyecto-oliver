@@ -26,7 +26,7 @@ export default function PageHeader({ subtitle, onDisconnect }: Props) {
   }
 
   return (
-    <header className="bg-[#2C1810] px-6 py-3 flex items-center justify-between border-b border-[#1A0F08] shrink-0">
+    <header className="bg-[#2C1810] pl-14 pr-4 py-3 md:px-6 flex items-center justify-between border-b border-[#1A0F08] shrink-0">
       <span className="text-[#D4A843] text-sm font-medium">{subtitle}</span>
       <div className="flex items-center gap-2">
         <button

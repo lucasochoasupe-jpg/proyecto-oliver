@@ -22,10 +22,16 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const [hiddenByPage, setHiddenByPage] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   useEffect(() => {
     setCollapsed(localStorage.getItem(STORAGE_KEY) === "1");
   }, []);
+
+  // Cerrar el drawer mobile al navegar a otra página.
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
 
   function toggle() {
     setCollapsed((prev) => {
@@ -44,8 +50,24 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <SetSidebarHiddenContext.Provider value={setHiddenByPage}>
       <div className="min-h-screen">
-        {showSidebar && <Sidebar collapsed={collapsed} onToggle={toggle} />}
-        <div className={showSidebar ? `transition-all duration-200 ${collapsed ? "ml-16" : "ml-56"}` : ""}>
+        {showSidebar && (
+          <Sidebar
+            collapsed={collapsed}
+            onToggle={toggle}
+            mobileOpen={mobileOpen}
+            onMobileToggle={() => setMobileOpen((p) => !p)}
+            onMobileClose={() => setMobileOpen(false)}
+          />
+        )}
+        <div
+          className={
+            showSidebar
+              ? collapsed
+                ? "transition-all duration-200 md:ml-16"
+                : "transition-all duration-200 md:ml-56"
+              : ""
+          }
+        >
           {children}
         </div>
       </div>

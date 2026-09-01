@@ -1,1 +1,64 @@
 @import "tailwindcss";
+
+/* Tablas responsive: en desktop se ven como tabla normal. Por debajo de
+   md (768px), cada <tr> pasa a ser una tarjeta apilada y cada <td> muestra
+   su columna como etiqueta (via data-label), en vez de cortarse fuera de
+   pantalla. Aplicar className="responsive-table" a la <table> y
+   data-label="..." a cada <td> (coincidiendo con su <th>). */
+@media (max-width: 767px) {
+  .responsive-table thead {
+    display: none;
+  }
+  .responsive-table,
+  .responsive-table tbody,
+  .responsive-table tr,
+  .responsive-table td {
+    display: block;
+    width: 100%;
+  }
+  /* Algunas tablas tienen min-w-[...] (Tailwind) para forzar scroll horizontal
+     en desktop cuando la ventana es angosta — hay que anularlo acá, si no cada
+     fila sigue siendo ancha como en desktop y el valor de cada celda queda
+     empujado fuera de pantalla por el justify-content: space-between de abajo. */
+  .responsive-table {
+    min-width: 0 !important;
+  }
+  .responsive-table tr {
+    margin-bottom: 0.75rem;
+    border: 1px solid #EDE0CC;
+    border-radius: 0.75rem;
+    overflow: hidden;
+  }
+  .responsive-table td {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid #EDE0CC;
+    text-align: right;
+  }
+  .responsive-table td:last-child {
+    border-bottom: none;
+    justify-content: flex-end;
+  }
+  .responsive-table td[data-label]::before {
+    content: attr(data-label);
+    font-weight: 600;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #8B6347;
+    text-align: left;
+    flex-shrink: 0;
+  }
+  .responsive-table td:empty {
+    display: none;
+  }
+  /* Celdas de detalle expandible (colSpan en desktop) — quedan en bloque, no
+     en fila con etiqueta, porque son contenido libre de varias líneas. */
+  .responsive-table td.detail-cell {
+    display: block;
+    text-align: left;
+  }
+}

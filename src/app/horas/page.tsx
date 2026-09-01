@@ -96,9 +96,9 @@ export default function HorasPage() {
       <PageHeader subtitle="Horas trabajadas" />
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-2">
           <h1 className="text-xl font-bold text-[#2C1810]">Horas trabajadas</h1>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <button
               onClick={fetchData}
               className="text-xs text-[#8B6347] hover:text-[#2C1810] border border-[#D4A843] hover:border-[#2C1810] px-3 py-1 rounded-full active:scale-95 transition-colors"
@@ -199,7 +199,7 @@ export default function HorasPage() {
           )}
 
           {!loading && data && data.resumen.length > 0 && (
-            <table className="w-full text-sm">
+            <table className="w-full text-sm responsive-table">
               <thead>
                 <tr className="border-b border-[#EDE0CC] bg-[#FAF7F2]">
                   <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Empleado</th>
@@ -214,7 +214,7 @@ export default function HorasPage() {
                       onClick={() => setExpandido(expandido === e.nombre ? null : e.nombre)}
                       className={`border-b border-[#EDE0CC] hover:bg-[#FAF7F2] transition-colors cursor-pointer ${i % 2 === 0 ? "" : "bg-[#FDFAF6]"}`}
                     >
-                      <td className="px-4 py-3 font-medium text-[#2C1810]">
+                      <td className="px-4 py-3 font-medium text-[#2C1810]" data-label="Empleado">
                         {e.nombre}
                         {e.enCurso && (
                           <span className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
@@ -222,12 +222,13 @@ export default function HorasPage() {
                           </span>
                         )}
                       </td>
-                      <td className="px-4 py-3 font-mono text-[#2C1810] font-semibold">{formatHoras(e.totalHoras)}</td>
+                      <td className="px-4 py-3 font-mono text-[#2C1810] font-semibold" data-label="Total horas">{formatHoras(e.totalHoras)}</td>
                       <td className="px-4 py-3 text-[#B89070] text-xs">{expandido === e.nombre ? "▲ ocultar" : "▼ detalle"}</td>
                     </tr>
                     {expandido === e.nombre && (
                       <tr key={`${e.nombre}-detalle`}>
-                        <td colSpan={4} className="bg-[#FAF7F2] px-4 py-3">
+                        <td colSpan={4} className="detail-cell bg-[#FAF7F2] px-4 py-3">
+                          <div className="overflow-x-auto">
                           <table className="w-full text-xs">
                             <thead>
                               <tr className="text-[#8B6347] uppercase tracking-wide">
@@ -254,6 +255,7 @@ export default function HorasPage() {
                               ))}
                             </tbody>
                           </table>
+                          </div>
                         </td>
                       </tr>
                     )}

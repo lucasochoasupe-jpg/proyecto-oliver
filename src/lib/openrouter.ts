@@ -26,7 +26,7 @@ export async function generateReply(history: ChatMessage[]): Promise<string> {
 // Toma lo que escribió el empleado (duración, fechas, motivo) y lo resume en una
 // sola línea para el bloque de Administración. Si el LLM falla (429/402/timeout),
 // devuelve el texto crudo normalizado: el aviso NUNCA se pierde por esto.
-const PARSE_DETALLE_SYSTEM = `Sos un asistente que resume, para un aviso interno de RRHH, el texto libre que un empleado escribió sobre su ausencia, licencia o urgencia.
+const PARSE_DETALLE_SYSTEM = `Sos un asistente que resume, para un aviso interno de RRHH, el texto libre que un empleado escribió sobre su ausencia, vacaciones o urgencia.
 Generá UNA sola línea en español que incluya, solo si están presentes: duración en días, fecha de inicio, fecha de fin y motivo/descripción.
 No inventes datos que el empleado no dio. No agregues saludos, comillas ni explicaciones. Respondé únicamente el resumen en una línea.`;
 

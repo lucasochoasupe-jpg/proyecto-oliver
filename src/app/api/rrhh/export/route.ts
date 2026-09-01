@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 function clasificarMotivo(motivo: string): string {
   const m = motivo.toLowerCase();
   if (m.includes("urgencia")) return "Urgencia";
-  if (m.includes("licencia")) return "Licencia";
+  if (m.includes("vacaciones") || m.includes("licencia")) return "Vacaciones";
   if (m.includes("enfermedad")) return "Enfermedad";
   if (m.includes("personal")) return "Motivo Personal";
   return "Otro";

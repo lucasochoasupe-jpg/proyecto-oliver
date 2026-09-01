@@ -318,9 +318,9 @@ export default function AsistenciaPage() {
       <PageHeader subtitle="Control de Asistencia" />
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-2">
           <h1 className="text-xl font-bold text-[#2C1810]">Asistencia</h1>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <button
               onClick={abrirManual}
               className="text-xs text-white bg-[#D4A843] hover:bg-[#C4983A] px-3 py-1 rounded-full active:scale-95 transition-colors font-medium"
@@ -430,7 +430,7 @@ export default function AsistenciaPage() {
                 Celular no registrado / WhatsApp no autorizado: revisá y corregí en Empleados, después descartá la alerta.
               </p>
             </div>
-            <table className="w-full text-sm">
+            <table className="w-full text-sm responsive-table">
               <thead>
                 <tr className="border-b border-[#EDE0CC] bg-[#FAF7F2]">
                   <th className="text-left px-4 py-2 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Empleado</th>
@@ -446,14 +446,14 @@ export default function AsistenciaPage() {
                   const puedeAprobar = r.sucursal_id != null && r.tipo != null;
                   return (
                     <tr key={r.id} className="border-b border-[#EDE0CC]">
-                      <td className="px-4 py-2.5 font-medium text-[#2C1810]">{r.nombre ?? r.phone}</td>
-                      <td className="px-4 py-2.5 text-[#5C3D2E]">{r.sucursal_nombre ?? <span className="italic text-[#B89070]">—</span>}</td>
-                      <td className="px-4 py-2.5">{r.tipo ? <BadgeTipo tipo={r.tipo} /> : <span className="italic text-[#B89070] text-xs">—</span>}</td>
-                      <td className="px-4 py-2.5 text-[#8B6347]">
+                      <td className="px-4 py-2.5 font-medium text-[#2C1810]" data-label="Empleado">{r.nombre ?? r.phone}</td>
+                      <td className="px-4 py-2.5 text-[#5C3D2E]" data-label="Sucursal">{r.sucursal_nombre ?? <span className="italic text-[#B89070]">—</span>}</td>
+                      <td className="px-4 py-2.5" data-label="Tipo">{r.tipo ? <BadgeTipo tipo={r.tipo} /> : <span className="italic text-[#B89070] text-xs">—</span>}</td>
+                      <td className="px-4 py-2.5 text-[#8B6347]" data-label="Motivo">
                         {motivoLabel(r.motivo)}
                         {r.distancia_metros != null && <span className="text-[#B89070]"> ({r.distancia_metros}m)</span>}
                       </td>
-                      <td className="px-4 py-2.5 text-[#8B6347] whitespace-nowrap">
+                      <td className="px-4 py-2.5 text-[#8B6347] whitespace-nowrap" data-label="Fecha / hora">
                         {formatFecha(r.created_at)} {formatHora(r.created_at)}
                       </td>
                       <td className="px-4 py-2.5 text-right whitespace-nowrap">
@@ -492,7 +492,7 @@ export default function AsistenciaPage() {
                 Escanearon el QR y arrancaron el trámite pero no llegaron a mandar la ubicación (o ni siquiera terminaron de decir su nombre). Se limpia solo a los 30 min de inactividad.
               </p>
             </div>
-            <table className="w-full text-sm">
+            <table className="w-full text-sm responsive-table">
               <thead>
                 <tr className="border-b border-[#EDE0CC] bg-[#FAF7F2]">
                   <th className="text-left px-4 py-2 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Empleado / Celular</th>
@@ -506,11 +506,11 @@ export default function AsistenciaPage() {
               <tbody>
                 {pendientes.map((p) => (
                   <tr key={p.phone} className="border-b border-[#EDE0CC]">
-                    <td className="px-4 py-2.5 font-medium text-[#2C1810]">{p.nombre ?? p.phone}</td>
-                    <td className="px-4 py-2.5 text-[#5C3D2E]">{p.sucursalNombre ?? <span className="italic text-[#B89070]">—</span>}</td>
-                    <td className="px-4 py-2.5">{p.tipo ? <BadgeTipo tipo={p.tipo} /> : <span className="italic text-[#B89070] text-xs">—</span>}</td>
-                    <td className="px-4 py-2.5 text-[#8B6347]">{stepLabel(p.step)}</td>
-                    <td className="px-4 py-2.5 text-[#8B6347] whitespace-nowrap">{haceLabel(p.updated_at)}</td>
+                    <td className="px-4 py-2.5 font-medium text-[#2C1810]" data-label="Empleado / Celular">{p.nombre ?? p.phone}</td>
+                    <td className="px-4 py-2.5 text-[#5C3D2E]" data-label="Sucursal">{p.sucursalNombre ?? <span className="italic text-[#B89070]">—</span>}</td>
+                    <td className="px-4 py-2.5" data-label="Tipo">{p.tipo ? <BadgeTipo tipo={p.tipo} /> : <span className="italic text-[#B89070] text-xs">—</span>}</td>
+                    <td className="px-4 py-2.5 text-[#8B6347]" data-label="Quedó en">{stepLabel(p.step)}</td>
+                    <td className="px-4 py-2.5 text-[#8B6347] whitespace-nowrap" data-label="Última actividad">{haceLabel(p.updated_at)}</td>
                     <td className="px-4 py-2.5 text-right">
                       <button
                         onClick={() => descartarPendiente(p.phone)}
@@ -572,7 +572,7 @@ export default function AsistenciaPage() {
           )}
 
           {!loading && data && data.records.length > 0 && (
-            <table className="w-full text-sm">
+            <table className="w-full text-sm responsive-table">
               <thead>
                 <tr className="border-b border-[#EDE0CC] bg-[#FAF7F2]">
                   <th className="w-10 px-4 py-3">
@@ -610,12 +610,12 @@ export default function AsistenciaPage() {
                           className="h-4 w-4 rounded border-[#D4A843] text-[#2C1810] focus:ring-[#D4A843]"
                         />
                       </td>
-                      <td className="px-4 py-3 font-medium text-[#2C1810]">{r.nombre ?? r.phone}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-[#8B6347]">{r.celular ?? <span className="italic text-[#B89070]">—</span>}</td>
-                      <td className="px-4 py-3 text-[#5C3D2E]">{r.sucursal_nombre}</td>
-                      <td className="px-4 py-3"><BadgeTipo tipo={r.tipo} /></td>
-                      <td className="px-4 py-3 text-[#8B6347] whitespace-nowrap">{formatFecha(r.created_at)}</td>
-                      <td className="px-4 py-3 text-[#8B6347] font-mono">{formatHora(r.created_at)}</td>
+                      <td className="px-4 py-3 font-medium text-[#2C1810]" data-label="Empleado">{r.nombre ?? r.phone}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-[#8B6347]" data-label="Celular">{r.celular ?? <span className="italic text-[#B89070]">—</span>}</td>
+                      <td className="px-4 py-3 text-[#5C3D2E]" data-label="Sucursal">{r.sucursal_nombre}</td>
+                      <td className="px-4 py-3" data-label="Tipo"><BadgeTipo tipo={r.tipo} /></td>
+                      <td className="px-4 py-3 text-[#8B6347] whitespace-nowrap" data-label="Fecha">{formatFecha(r.created_at)}</td>
+                      <td className="px-4 py-3 text-[#8B6347] font-mono" data-label="Hora">{formatHora(r.created_at)}</td>
                       <td className="px-4 py-3 text-right">
                         {confirmDelete === r.id ? (
                           <div className="flex items-center justify-end gap-2">

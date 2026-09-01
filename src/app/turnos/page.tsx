@@ -332,7 +332,7 @@ export default function TurnosPage() {
       <PageHeader subtitle="Turnos y cumplimiento" />
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-2">
           <h1 className="text-xl font-bold text-[#2C1810]">Turnos</h1>
           <div className="flex items-center gap-2 bg-white border border-[#EDE0CC] rounded-full p-1">
             {(["horarios", "cumplimiento"] as const).map((t) => (
@@ -604,7 +604,7 @@ export default function TurnosPage() {
               ) : horarios.length === 0 ? (
                 <div className="text-center py-16 text-[#8B6347] text-sm">Este empleado no tiene turnos definidos.</div>
               ) : (
-                <table className="w-full text-sm">
+                <table className="w-full text-sm responsive-table">
                   <thead>
                     <tr className="border-b border-[#EDE0CC] bg-[#FAF7F2]">
                       <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Día</th>
@@ -621,7 +621,7 @@ export default function TurnosPage() {
                         <tr key={h.id} className={`border-b border-[#EDE0CC] hover:bg-[#FAF7F2] transition-colors ${i % 2 === 0 ? "" : "bg-[#FDFAF6]"}`}>
                           {isEditing ? (
                             <>
-                              <td className="px-4 py-2.5">
+                              <td className="px-4 py-2.5" data-label="Día">
                                 <select
                                   value={editForm.dia_semana}
                                   onChange={(e) => setEditForm({ ...editForm, dia_semana: Number(e.target.value) })}
@@ -632,7 +632,7 @@ export default function TurnosPage() {
                                   ))}
                                 </select>
                               </td>
-                              <td className="px-4 py-2.5">
+                              <td className="px-4 py-2.5" data-label="Entrada">
                                 <input
                                   type="time"
                                   value={editForm.hora_inicio}
@@ -640,7 +640,7 @@ export default function TurnosPage() {
                                   className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none"
                                 />
                               </td>
-                              <td className="px-4 py-2.5">
+                              <td className="px-4 py-2.5" data-label="Salida">
                                 <div className="flex items-center">
                                   <input
                                     type="time"
@@ -651,7 +651,7 @@ export default function TurnosPage() {
                                   <BadgeNocturno inicio={editForm.hora_inicio} fin={editForm.hora_fin} />
                                 </div>
                               </td>
-                              <td className="px-4 py-2.5">
+                              <td className="px-4 py-2.5" data-label="Tolerancia">
                                 <input
                                   type="number"
                                   min={0}
@@ -680,9 +680,9 @@ export default function TurnosPage() {
                             </>
                           ) : (
                             <>
-                              <td className="px-4 py-2.5 font-medium text-[#2C1810]">{DIAS[h.dia_semana]}</td>
-                              <td className="px-4 py-2.5 font-mono text-[#2C1810]">{h.hora_inicio}</td>
-                              <td className="px-4 py-2.5 font-mono text-[#2C1810]">
+                              <td className="px-4 py-2.5 font-medium text-[#2C1810]" data-label="Día">{DIAS[h.dia_semana]}</td>
+                              <td className="px-4 py-2.5 font-mono text-[#2C1810]" data-label="Entrada">{h.hora_inicio}</td>
+                              <td className="px-4 py-2.5 font-mono text-[#2C1810]" data-label="Salida">
                                 {h.hora_fin}
                                 <BadgeNocturno
                                   inicio={h.hora_inicio}
@@ -690,7 +690,7 @@ export default function TurnosPage() {
                                   diaSiguiente={DIAS[(h.dia_semana + 1) % 7]}
                                 />
                               </td>
-                              <td className="px-4 py-2.5 text-[#8B6347]">
+                              <td className="px-4 py-2.5 text-[#8B6347]" data-label="Tolerancia">
                                 {h.tolerancia_min !== null ? `${h.tolerancia_min} min` : <span className="italic">General ({tolerancia ?? 30})</span>}
                               </td>
                               <td className="px-4 py-2.5">
@@ -808,7 +808,7 @@ export default function TurnosPage() {
               ) : filasFiltradas.length === 0 ? (
                 <div className="text-center py-16 text-[#8B6347] text-sm">Ningún turno registrado en el rango seleccionado.</div>
               ) : (
-                <table className="w-full text-sm">
+                <table className="w-full text-sm responsive-table">
                   <thead>
                     <tr className="border-b border-[#EDE0CC] bg-[#FAF7F2]">
                       <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Empleado</th>
@@ -822,10 +822,10 @@ export default function TurnosPage() {
                   <tbody>
                     {filasFiltradas.map((f, i) => (
                       <tr key={`${f.nombre}-${f.entrada_real}`} className={`border-b border-[#EDE0CC] hover:bg-[#FAF7F2] transition-colors ${i % 2 === 0 ? "" : "bg-[#FDFAF6]"}`}>
-                        <td className="px-4 py-2.5 font-medium text-[#2C1810]">{f.nombre}</td>
-                        <td className="px-4 py-2.5 text-[#5C3D2E]">{f.sucursal_nombre}</td>
-                        <td className="px-4 py-2.5 text-[#8B6347]">{formatFechaISO(f.fecha)}</td>
-                        <td className="px-4 py-2.5">
+                        <td className="px-4 py-2.5 font-medium text-[#2C1810]" data-label="Empleado">{f.nombre}</td>
+                        <td className="px-4 py-2.5 text-[#5C3D2E]" data-label="Sucursal">{f.sucursal_nombre}</td>
+                        <td className="px-4 py-2.5 text-[#8B6347]" data-label="Fecha">{formatFechaISO(f.fecha)}</td>
+                        <td className="px-4 py-2.5" data-label="Entrada">
                           <span className="font-mono text-[#2C1810]">{formatHora(f.entrada_real)}</span>
                           {f.entrada_esperada && (
                             <span className="text-xs text-[#B89070] ml-1.5">
@@ -833,7 +833,7 @@ export default function TurnosPage() {
                             </span>
                           )}
                         </td>
-                        <td className="px-4 py-2.5">
+                        <td className="px-4 py-2.5" data-label="Salida">
                           {f.salida_real ? (
                             <span className="font-mono text-[#2C1810]">{formatHora(f.salida_real)}</span>
                           ) : (
@@ -845,7 +845,7 @@ export default function TurnosPage() {
                             </span>
                           )}
                         </td>
-                        <td className="px-4 py-2.5">
+                        <td className="px-4 py-2.5" data-label="Estado">
                           <span className={`text-xs font-medium px-2 py-0.5 rounded-full border ${ESTADO_INFO[f.estado].className}`}>
                             {ESTADO_INFO[f.estado].label}
                           </span>

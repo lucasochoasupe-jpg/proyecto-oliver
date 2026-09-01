@@ -19,7 +19,7 @@ interface ApiResponse {
 }
 
 const SUCURSALES = ["Todas", "Fraga", "Campbell", "Mendoza", "Avenida", "Donado", "Montevideo", "Terminal"];
-const MOTIVOS = ["Todos", "Enfermedad", "Motivo Personal", "Licencia", "Urgencia", "Otro"];
+const MOTIVOS = ["Todos", "Enfermedad", "Motivo Personal", "Vacaciones", "Urgencia", "Otro"];
 
 function formatDate(unix: number) {
   return new Date(unix * 1000).toLocaleDateString("es-AR", {
@@ -47,7 +47,7 @@ function toISODay(unix: number) {
 function clasificarMotivo(motivo: string): string {
   const m = motivo.toLowerCase();
   if (m.includes("urgencia")) return "Urgencia";
-  if (m.includes("licencia")) return "Licencia";
+  if (m.includes("vacaciones") || m.includes("licencia")) return "Vacaciones";
   if (m.includes("enfermedad")) return "Enfermedad";
   if (m.includes("personal")) return "Motivo Personal";
   return "Otro";
@@ -57,7 +57,7 @@ function BadgeMotivo({ motivo }: { motivo: string }) {
   const tipo = clasificarMotivo(motivo);
   const colors: Record<string, string> = {
     Urgencia: "bg-red-100 text-red-700 border border-red-200",
-    Licencia: "bg-blue-100 text-blue-700 border border-blue-200",
+    Vacaciones: "bg-blue-100 text-blue-700 border border-blue-200",
     Enfermedad: "bg-amber-100 text-amber-700 border border-amber-200",
     "Motivo Personal": "bg-purple-100 text-purple-700 border border-purple-200",
     Otro: "bg-gray-100 text-gray-600 border border-gray-200",
@@ -135,9 +135,9 @@ export default function RRHHPage() {
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
 
         {/* Título */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-2">
           <h1 className="text-xl font-bold text-[#2C1810]">Ausentismo y Novedades</h1>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <button
               onClick={fetchData}
               className="text-xs text-[#8B6347] hover:text-[#2C1810] border border-[#D4A843] hover:border-[#2C1810] px-3 py-1 rounded-full active:scale-95 transition-colors"
@@ -281,7 +281,7 @@ export default function RRHHPage() {
           )}
 
           {!loading && ausenciasFiltradas.length > 0 && (
-            <table className="w-full text-sm">
+            <table className="w-full text-sm responsive-table">
               <thead>
                 <tr className="border-b border-[#EDE0CC] bg-[#FAF7F2]">
                   <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Empleado</th>
@@ -298,17 +298,21 @@ export default function RRHHPage() {
                     key={a.id}
                     className={`border-b border-[#EDE0CC] hover:bg-[#FAF7F2] transition-colors ${i % 2 === 0 ? "" : "bg-[#FDFAF6]"}`}
                   >
-                    <td className="px-4 py-3 font-medium text-[#2C1810]">{a.nombre}</td>
-                    <td className="px-4 py-3 text-[#5C3D2E]">{a.sucursal}</td>
-                    <td className="px-4 py-3"><BadgeMotivo motivo={a.motivo} /></td>
-                    <td className="px-4 py-3 text-[#8B6347] whitespace-nowrap">
+                    <td className="px-4 py-3 font-medium text-[#2C1810]" data-label="Empleado">{a.nombre}</td>
+                    <td className="px-4 py-3 text-[#5C3D2E]" data-label="Sucursal">{a.sucursal}</td>
+                    <td className="px-4 py-3" data-label="Tipo"><BadgeMotivo motivo={a.motivo} /></td>
+                    <td className="px-4 py-3 text-[#8B6347] whitespace-nowrap" data-label="Fecha">
                       {formatDate(a.fecha)}
                       <span className="text-xs ml-1 text-[#B89070]">{formatTime(a.fecha)}</span>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3" data-label="Certificado">
                       {a.certificadoPendiente ? (
                         <span className="text-xs bg-amber-100 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full font-medium">
                           ⚠ Pendiente
+                        </span>
+                      ) : a.certificadoRecibidoEn ? (
+                        <span className="text-xs bg-emerald-100 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full font-medium">
+                          ✅ Recibido
                         </span>
                       ) : (
                         <span className="text-xs text-[#8B6347]">—</span>
@@ -400,6 +404,12 @@ export default function RRHHPage() {
               {detalle.certificadoPendiente && (
                 <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-700">
                   ⚠ El empleado aún no presentó el certificado médico.
+                </div>
+              )}
+              {detalle.certificadoRecibidoEn && (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm text-emerald-700">
+                  ✅ Certificado recibido el {formatDate(detalle.certificadoRecibidoEn)} a las{" "}
+                  {formatTime(detalle.certificadoRecibidoEn)}.
                 </div>
               )}
             </div>
