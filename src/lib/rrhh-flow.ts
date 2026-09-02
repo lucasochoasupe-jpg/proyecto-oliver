@@ -6,6 +6,7 @@ import {
   setPendingAdminReport,
   enqueueOutbox,
   validarEmpleadoDB,
+  getEmpleadoByJid,
   listSucursales,
   getFlowState,
   setFlowState,
@@ -338,8 +339,20 @@ export async function handleRRHH(
     return;
   }
 
-  // Sin estado → primer contacto: saludo + pedir nombre
+  // Sin estado → primer contacto. Si el número ya está vinculado a un empleado
+  // (por haber marcado asistencia antes), no hace falta volver a pedirle el
+  // nombre — el vínculo teléfono↔empleado ya es la verificación real (misma
+  // lógica que en marcación, ver handler.ts).
   if (!state) {
+    const empleadoVinculado = getEmpleadoByJid(phone);
+    if (empleadoVinculado) {
+      setFlowState(phone, FLOW, { step: "sucursal", nombre: empleadoVinculado.nombre });
+      await reply(
+        `¡Hola, ${empleadoVinculado.nombre}! Soy Sanca, el asistente virtual de la Panadería San Cayetano II. ` +
+          `¿A qué sucursal pertenecés?\n${listaSucursales()}`
+      );
+      return;
+    }
     setFlowState(phone, FLOW, { step: "nombre" });
     await reply(GREETING);
     return;
