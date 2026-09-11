@@ -26,6 +26,19 @@ interface HorarioEmpleado {
   tolerancia_min: number | null;
 }
 
+interface TurnoPuntual {
+  id: number;
+  empleado_id: number;
+  empleado_nombre: string;
+  sucursal_id: number | null;
+  sucursal_nombre: string | null;
+  fecha: string;
+  hora_inicio: string;
+  hora_fin: string;
+  tolerancia_min: number | null;
+  nota: string | null;
+}
+
 interface TurnoTemplate {
   id: number;
   nombre: string;
@@ -33,6 +46,16 @@ interface TurnoTemplate {
   hora_fin: string;
   dias_semana: number[];
   tolerancia_min: number | null;
+}
+
+interface AusenciaRow {
+  empleado_nombre: string;
+  sucursal_nombre: string | null;
+  fecha: string;
+  hora_inicio: string;
+  hora_fin: string;
+  horas: number;
+  justificada: boolean;
 }
 
 interface CumplimientoRow {
@@ -109,7 +132,7 @@ const emptyEditForm: { dia_semana: number; hora_inicio: string; hora_fin: string
 };
 
 export default function TurnosPage() {
-  const [tab, setTab] = useState<"horarios" | "cumplimiento">("horarios");
+  const [tab, setTab] = useState<"horarios" | "cumplimiento" | "inasistencias">("horarios");
   const [empleados, setEmpleados] = useState<Empleado[]>([]);
   const [sucursales, setSucursales] = useState<Sucursal[]>([]);
   const [templates, setTemplates] = useState<TurnoTemplate[]>([]);
@@ -119,11 +142,24 @@ export default function TurnosPage() {
   const [horarios, setHorarios] = useState<HorarioEmpleado[]>([]);
   const [loadingHorarios, setLoadingHorarios] = useState(false);
   const [todosHorarios, setTodosHorarios] = useState<HorarioEmpleado[]>([]);
+  const [todosPuntuales, setTodosPuntuales] = useState<TurnoPuntual[]>([]);
   const verTurnosRef = useRef<HTMLDivElement>(null);
   const [editandoId, setEditandoId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState(emptyEditForm);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
   const [guardando, setGuardando] = useState(false);
+
+  // ── Turnos puntuales del empleado seleccionado (fecha exacta, no recurrente) ──
+  const [puntuales, setPuntuales] = useState<TurnoPuntual[]>([]);
+  const [loadingPuntuales, setLoadingPuntuales] = useState(false);
+  const [nuevaFechaPuntual, setNuevaFechaPuntual] = useState("");
+  const [nuevaHoraInicioPuntual, setNuevaHoraInicioPuntual] = useState("08:00");
+  const [nuevaHoraFinPuntual, setNuevaHoraFinPuntual] = useState("14:00");
+  const [nuevaToleranciaPuntual, setNuevaToleranciaPuntual] = useState<number | null>(15);
+  const [nuevaNotaPuntual, setNuevaNotaPuntual] = useState("");
+  const [guardandoPuntual, setGuardandoPuntual] = useState(false);
+  const [errorPuntual, setErrorPuntual] = useState("");
+  const [confirmDeletePuntual, setConfirmDeletePuntual] = useState<number | null>(null);
 
   // ── Plantillas de turno ──
   const [mostrarNuevaPlantilla, setMostrarNuevaPlantilla] = useState(false);
@@ -158,6 +194,11 @@ export default function TurnosPage() {
   const [tolerancia, setTolerancia] = useState<number | null>(null);
   const [guardandoTolerancia, setGuardandoTolerancia] = useState(false);
 
+  // ── Inasistencias (reusa desde/hasta/sucursalFiltro/nombresFiltro de arriba) ──
+  const [ausencias, setAusencias] = useState<AusenciaRow[] | null>(null);
+  const [loadingAusencias, setLoadingAusencias] = useState(false);
+  const [soloSinAviso, setSoloSinAviso] = useState(false);
+
   const fetchTemplates = useCallback(async () => {
     const res = await fetch("/api/turno-templates");
     setTemplates((await res.json()) as TurnoTemplate[]);
@@ -166,6 +207,8 @@ export default function TurnosPage() {
   const fetchTodosHorarios = useCallback(async () => {
     const res = await fetch("/api/horarios");
     setTodosHorarios((await res.json()) as HorarioEmpleado[]);
+    const resPuntuales = await fetch("/api/turnos-puntuales");
+    setTodosPuntuales((await resPuntuales.json()) as TurnoPuntual[]);
   }, []);
 
   useEffect(() => {
@@ -215,6 +258,53 @@ export default function TurnosPage() {
     if (tab === "horarios") fetchHorarios();
   }, [tab, fetchHorarios]);
 
+  const fetchPuntuales = useCallback(async () => {
+    if (empleadoId === null) return;
+    setLoadingPuntuales(true);
+    const res = await fetch(`/api/turnos-puntuales?empleadoId=${empleadoId}`);
+    setPuntuales((await res.json()) as TurnoPuntual[]);
+    setLoadingPuntuales(false);
+  }, [empleadoId]);
+
+  useEffect(() => {
+    if (tab === "horarios") fetchPuntuales();
+  }, [tab, fetchPuntuales]);
+
+  async function agregarPuntual() {
+    if (empleadoId === null) return;
+    setErrorPuntual("");
+    if (!nuevaFechaPuntual) { setErrorPuntual("Elegí una fecha"); return; }
+    setGuardandoPuntual(true);
+    const res = await fetch("/api/turnos-puntuales", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        empleadoId,
+        fecha: nuevaFechaPuntual,
+        horaInicio: nuevaHoraInicioPuntual,
+        horaFin: nuevaHoraFinPuntual,
+        toleranciaMin: nuevaToleranciaPuntual,
+        nota: nuevaNotaPuntual,
+      }),
+    });
+    setGuardandoPuntual(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setErrorPuntual(data.error ?? "No se pudo guardar el turno puntual");
+      return;
+    }
+    setNuevaFechaPuntual("");
+    setNuevaNotaPuntual("");
+    fetchPuntuales();
+    fetchTodosHorarios();
+  }
+
+  async function eliminarPuntual(id: number) {
+    await fetch(`/api/turnos-puntuales/${id}`, { method: "DELETE" });
+    setConfirmDeletePuntual(null);
+    fetchPuntuales();
+  }
+
   const fetchCumplimiento = useCallback(async () => {
     setLoadingCumplimiento(true);
     const params = new URLSearchParams();
@@ -234,6 +324,25 @@ export default function TurnosPage() {
   useEffect(() => {
     if (tab === "cumplimiento") fetchCumplimiento();
   }, [tab, fetchCumplimiento]);
+
+  const fetchAusencias = useCallback(async () => {
+    setLoadingAusencias(true);
+    const params = new URLSearchParams();
+    if (desde) params.set("desde", desde);
+    if (hasta) params.set("hasta", hasta);
+    if (nombresFiltro.length > 0) params.set("nombres", nombresFiltro.join(","));
+    const res = await fetch(`/api/asistencia/ausencias?${params}`);
+    const json = (await res.json()) as { desde: string; hasta: string; filas: AusenciaRow[] };
+    setAusencias(json.filas);
+    setLoadingAusencias(false);
+    if (!desde) setDesde(json.desde);
+    if (!hasta) setHasta(json.hasta);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [desde, hasta, nombresFiltro]);
+
+  useEffect(() => {
+    if (tab === "inasistencias") fetchAusencias();
+  }, [tab, fetchAusencias]);
 
   function startEdit(h: HorarioEmpleado) {
     setEditandoId(h.id);
@@ -343,12 +452,19 @@ export default function TurnosPage() {
     verTurnosRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  const idsConTurno = new Set(todosHorarios.map((h) => h.empleado_id));
+  const idsConTurno = new Set([...todosHorarios.map((h) => h.empleado_id), ...todosPuntuales.map((p) => p.empleado_id)]);
   const empleadosSinTurno = empleados.filter((e) => !idsConTurno.has(e.id));
 
   const filasFiltradas = (filas ?? []).filter((f) => estadoFiltro === "Todos" || f.estado === estadoFiltro);
   const hayFiltrosCumplimiento = sucursalFiltro !== "Todas" || nombresFiltro.length > 0 || estadoFiltro !== "Todos";
   const puedeAsignar = asignEmpleados.length > 0 && asignDias.length > 0;
+
+  const ausenciasFiltradas = (ausencias ?? []).filter((a) => {
+    if (sucursalFiltro !== "Todas" && a.sucursal_nombre !== sucursalFiltro) return false;
+    if (soloSinAviso && a.justificada) return false;
+    return true;
+  });
+  const ausenciasSinAviso = (ausencias ?? []).filter((a) => !a.justificada).length;
 
   return (
     <div className="min-h-screen bg-[#FAF7F2]">
@@ -358,7 +474,7 @@ export default function TurnosPage() {
         <div className="flex items-center justify-between flex-wrap gap-2">
           <h1 className="text-xl font-bold text-[#2C1810]">Turnos</h1>
           <div className="flex items-center gap-2 bg-white border border-[#EDE0CC] rounded-full p-1">
-            {(["horarios", "cumplimiento"] as const).map((t) => (
+            {(["horarios", "cumplimiento", "inasistencias"] as const).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -366,7 +482,7 @@ export default function TurnosPage() {
                   tab === t ? "bg-[#2C1810] text-white" : "text-[#8B6347] hover:text-[#2C1810]"
                 }`}
               >
-                {t === "horarios" ? "Horarios" : "Cumplimiento"}
+                {t === "horarios" ? "Horarios" : t === "cumplimiento" ? "Cumplimiento" : "Inasistencias"}
               </button>
             ))}
           </div>
@@ -791,6 +907,117 @@ export default function TurnosPage() {
                 </table>
               )}
             </div>
+
+            {/* Turnos puntuales del empleado seleccionado (fecha exacta, no recurrente) */}
+            <div className="bg-white rounded-xl border border-[#EDE0CC] p-4 space-y-3">
+              <div>
+                <h2 className="text-sm font-semibold text-[#2C1810]">
+                  Turnos puntuales{empleados.find((e) => e.id === empleadoId) ? ` de ${empleados.find((e) => e.id === empleadoId)!.nombre}` : ""}
+                </h2>
+                <p className="text-xs text-[#8B6347] mt-0.5">
+                  Para fechas sueltas que no siguen el patrón semanal (ej. un domingo cada dos). Se suman al horario de arriba, no lo reemplazan.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap gap-3 items-end">
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs text-[#8B6347] font-medium">Fecha</label>
+                  <input
+                    type="date"
+                    value={nuevaFechaPuntual}
+                    onChange={(e) => setNuevaFechaPuntual(e.target.value)}
+                    className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs text-[#8B6347] font-medium">Entrada</label>
+                  <input
+                    type="time"
+                    value={nuevaHoraInicioPuntual}
+                    onChange={(e) => setNuevaHoraInicioPuntual(e.target.value)}
+                    className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs text-[#8B6347] font-medium">Salida</label>
+                  <div className="flex items-center">
+                    <input
+                      type="time"
+                      value={nuevaHoraFinPuntual}
+                      onChange={(e) => setNuevaHoraFinPuntual(e.target.value)}
+                      className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                    />
+                    <BadgeNocturno inicio={nuevaHoraInicioPuntual} fin={nuevaHoraFinPuntual} />
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs text-[#8B6347] font-medium">Tolerancia (min)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={nuevaToleranciaPuntual ?? ""}
+                    onChange={(e) => setNuevaToleranciaPuntual(e.target.value === "" ? null : Number(e.target.value))}
+                    className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-24"
+                  />
+                </div>
+                <div className="flex flex-col gap-1 flex-1 min-w-[160px]">
+                  <label className="text-xs text-[#8B6347] font-medium">Nota (opcional)</label>
+                  <input
+                    type="text"
+                    placeholder="Ej: domingo por medio"
+                    value={nuevaNotaPuntual}
+                    onChange={(e) => setNuevaNotaPuntual(e.target.value)}
+                    className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-full"
+                  />
+                </div>
+                <button
+                  onClick={agregarPuntual}
+                  disabled={guardandoPuntual || empleadoId === null}
+                  className="text-xs text-white bg-[#2C1810] hover:bg-[#3D2418] disabled:opacity-40 px-4 py-2 rounded-full transition-colors font-medium"
+                >
+                  {guardandoPuntual ? "Guardando..." : "+ Agregar"}
+                </button>
+              </div>
+              {errorPuntual && <p className="text-xs text-red-500">{errorPuntual}</p>}
+
+              {loadingPuntuales ? (
+                <div className="flex justify-center py-6">
+                  <div className="w-6 h-6 border-2 border-[#EDE0CC] border-t-[#D4A843] rounded-full animate-spin" />
+                </div>
+              ) : puntuales.length === 0 ? (
+                <p className="text-xs text-[#B89070] italic">Sin turnos puntuales cargados para este empleado.</p>
+              ) : (
+                <div className="divide-y divide-[#EDE0CC]">
+                  {puntuales.map((p) => (
+                    <div key={p.id} className="flex items-center justify-between py-2 text-sm flex-wrap gap-2">
+                      <div>
+                        <span className="font-medium text-[#2C1810]">{formatFechaISO(p.fecha)}</span>
+                        <span className="font-mono text-[#8B6347] ml-2">{p.hora_inicio}–{p.hora_fin}</span>
+                        <BadgeNocturno inicio={p.hora_inicio} fin={p.hora_fin} />
+                        {p.tolerancia_min !== null && (
+                          <span className="text-xs text-[#B89070] ml-2">· tolerancia {p.tolerancia_min} min</span>
+                        )}
+                        {p.nota && <span className="text-xs text-[#B89070] ml-2">· {p.nota}</span>}
+                      </div>
+                      {confirmDeletePuntual === p.id ? (
+                        <span className="flex items-center gap-2">
+                          <button onClick={() => eliminarPuntual(p.id)} className="text-xs text-white bg-red-500 hover:bg-red-600 px-2 py-0.5 rounded font-medium">
+                            Confirmar
+                          </button>
+                          <button onClick={() => setConfirmDeletePuntual(null)} className="text-xs text-[#8B6347] underline">
+                            Cancelar
+                          </button>
+                        </span>
+                      ) : (
+                        <button onClick={() => setConfirmDeletePuntual(p.id)} className="text-xs text-red-400 hover:text-red-600 underline">
+                          Eliminar
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </>
         )}
 
@@ -926,6 +1153,126 @@ export default function TurnosPage() {
                         </td>
                       </tr>
                     ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </>
+        )}
+
+        {tab === "inasistencias" && (
+          <>
+            <div className="bg-white rounded-xl border border-[#EDE0CC] p-4 flex flex-wrap gap-3 items-end">
+              <EmpleadoMultiSelect value={nombresFiltro} onChange={setNombresFiltro} />
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-[#8B6347] font-medium">Desde</label>
+                <input
+                  type="date"
+                  value={desde}
+                  onChange={(e) => setDesde(e.target.value)}
+                  className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-[#8B6347] font-medium">Hasta</label>
+                <input
+                  type="date"
+                  value={hasta}
+                  onChange={(e) => setHasta(e.target.value)}
+                  className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-[#8B6347] font-medium">Sucursal</label>
+                <select
+                  value={sucursalFiltro}
+                  onChange={(e) => setSucursalFiltro(e.target.value)}
+                  className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                >
+                  <option>Todas</option>
+                  {sucursales.map((s) => <option key={s.id}>{s.nombre}</option>)}
+                </select>
+              </div>
+              <label className="flex items-center gap-2 cursor-pointer select-none pb-1.5">
+                <input
+                  type="checkbox"
+                  checked={soloSinAviso}
+                  onChange={(e) => setSoloSinAviso(e.target.checked)}
+                  className="accent-[#D4A843] w-4 h-4"
+                />
+                <span className="text-sm text-[#2C1810]">Solo sin aviso</span>
+              </label>
+              {(sucursalFiltro !== "Todas" || nombresFiltro.length > 0 || soloSinAviso) && (
+                <button
+                  onClick={() => { setSucursalFiltro("Todas"); setNombresFiltro([]); setSoloSinAviso(false); }}
+                  className="text-xs text-[#8B6347] hover:text-red-500 underline"
+                >
+                  Limpiar filtros
+                </button>
+              )}
+            </div>
+
+            {ausencias && (
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-white rounded-xl border border-[#EDE0CC] p-4">
+                  <p className="text-xs text-[#8B6347] uppercase tracking-wide font-medium">Inasistencias en el período</p>
+                  <p className="text-3xl font-bold text-[#2C1810] mt-1">{ausencias.length}</p>
+                </div>
+                <div className="bg-white rounded-xl border border-[#EDE0CC] p-4">
+                  <p className="text-xs text-[#8B6347] uppercase tracking-wide font-medium">Sin aviso a RRHH</p>
+                  <p className={`text-3xl font-bold mt-1 ${ausenciasSinAviso > 0 ? "text-red-600" : "text-[#2C1810]"}`}>
+                    {ausenciasSinAviso}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <div className="bg-white rounded-xl border border-[#EDE0CC] overflow-hidden">
+              {loadingAusencias ? (
+                <div className="flex justify-center py-16">
+                  <div className="w-8 h-8 border-2 border-[#EDE0CC] border-t-[#D4A843] rounded-full animate-spin" />
+                </div>
+              ) : ausenciasFiltradas.length === 0 ? (
+                <div className="text-center py-16 text-[#8B6347] text-sm">
+                  {ausencias?.length === 0 ? "Sin inasistencias en el rango seleccionado." : "Ningún registro coincide con los filtros."}
+                </div>
+              ) : (
+                <table className="w-full text-sm responsive-table">
+                  <thead>
+                    <tr className="border-b border-[#EDE0CC] bg-[#FAF7F2]">
+                      <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Empleado</th>
+                      <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Sucursal</th>
+                      <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Fecha</th>
+                      <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Horario esperado</th>
+                      <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Aviso</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ausenciasFiltradas
+                      .slice()
+                      .sort((a, b) => b.fecha.localeCompare(a.fecha))
+                      .map((a, i) => (
+                        <tr
+                          key={`${a.empleado_nombre}-${a.fecha}-${a.hora_inicio}`}
+                          className={`border-b border-[#EDE0CC] hover:bg-[#FAF7F2] transition-colors ${i % 2 === 0 ? "" : "bg-[#FDFAF6]"}`}
+                        >
+                          <td className="px-4 py-2.5 font-medium text-[#2C1810]" data-label="Empleado">{a.empleado_nombre}</td>
+                          <td className="px-4 py-2.5 text-[#5C3D2E]" data-label="Sucursal">{a.sucursal_nombre ?? "—"}</td>
+                          <td className="px-4 py-2.5 text-[#8B6347]" data-label="Fecha">{formatFechaISO(a.fecha)}</td>
+                          <td className="px-4 py-2.5 font-mono text-[#2C1810]" data-label="Horario esperado">{a.hora_inicio}–{a.hora_fin}</td>
+                          <td className="px-4 py-2.5" data-label="Aviso">
+                            {a.justificada ? (
+                              <span className="text-xs bg-emerald-100 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full font-medium">
+                                ✓ Con aviso
+                              </span>
+                            ) : (
+                              <span className="text-xs bg-red-100 text-red-700 border border-red-200 px-2 py-0.5 rounded-full font-medium">
+                                ⚠ Sin aviso
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
                   </tbody>
                 </table>
               )}

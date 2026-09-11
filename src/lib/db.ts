@@ -247,6 +247,21 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_horarios_empleado
     ON horarios_empleado(empleado_id, dia_semana);
 
+  CREATE TABLE IF NOT EXISTS turnos_puntuales (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    empleado_id INTEGER NOT NULL REFERENCES empleados(id),
+    sucursal_id INTEGER REFERENCES sucursales(id),
+    fecha TEXT NOT NULL,
+    hora_inicio TEXT NOT NULL,
+    hora_fin TEXT NOT NULL,
+    tolerancia_min INTEGER,
+    nota TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_turnos_puntuales_empleado_fecha
+    ON turnos_puntuales(empleado_id, fecha);
+
   CREATE TABLE IF NOT EXISTS turno_templates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nombre TEXT NOT NULL UNIQUE,
@@ -1490,16 +1505,23 @@ export interface Turno {
   nombre: string;
   sucursal_nombre: string;
   entrada_at: number;
+  entrada_id: number;
   salida_at: number | null;
+  salida_id: number | null;
   horas: number | null;
 }
 
-export function calcularHorasTrabajadas(filters?: {
+// Une la consulta + el emparejado entrada/salida en un solo lugar: lo
+// comparten calcularHorasTrabajadas (turnos, usado por cumplimiento y
+// liquidación) y listMarcacionesHuerfanas (salidas sin entrada previa, que
+// antes se descartaban en silencio — ahora se exponen para poder verlas y
+// resolverlas desde /asistencia).
+function emparejarAsistencia(filters?: {
   desde?: string;
   hasta?: string;
   sucursal?: string;
   nombres?: string[];
-}): Turno[] {
+}): { turnos: Turno[]; huerfanas: AsistenciaRecord[] } {
   let query = `
     SELECT a.*, s.nombre AS sucursal_nombre
     FROM asistencia a
@@ -1536,6 +1558,7 @@ export function calcularHorasTrabajadas(filters?: {
   }
 
   const turnos: Turno[] = [];
+  const huerfanas: AsistenciaRecord[] = [];
   for (const [nombre, regs] of porEmpleado) {
     let pendiente: AsistenciaRecord | null = null;
     for (const r of regs) {
@@ -1545,13 +1568,32 @@ export function calcularHorasTrabajadas(filters?: {
       } else if (pendiente) {
         turnos.push(aTurno(nombre, pendiente, r));
         pendiente = null;
+      } else {
+        huerfanas.push(r); // salida sin entrada previa
       }
-      // salida sin entrada previa: dato huérfano, se ignora
     }
     if (pendiente) turnos.push(aTurno(nombre, pendiente, null));
   }
 
-  return turnos;
+  return { turnos, huerfanas };
+}
+
+export function calcularHorasTrabajadas(filters?: {
+  desde?: string;
+  hasta?: string;
+  sucursal?: string;
+  nombres?: string[];
+}): Turno[] {
+  return emparejarAsistencia(filters).turnos;
+}
+
+export function listMarcacionesHuerfanas(filters?: {
+  desde?: string;
+  hasta?: string;
+  sucursal?: string;
+  nombres?: string[];
+}): AsistenciaRecord[] {
+  return emparejarAsistencia(filters).huerfanas;
 }
 
 function aTurno(nombre: string, entrada: AsistenciaRecord, salida: AsistenciaRecord | null): Turno {
@@ -1559,7 +1601,9 @@ function aTurno(nombre: string, entrada: AsistenciaRecord, salida: AsistenciaRec
     nombre,
     sucursal_nombre: entrada.sucursal_nombre,
     entrada_at: entrada.created_at,
+    entrada_id: entrada.id,
     salida_at: salida?.created_at ?? null,
+    salida_id: salida?.id ?? null,
     horas: salida ? (salida.created_at - entrada.created_at) / 3600 : null,
   };
 }
@@ -1669,6 +1713,105 @@ export function insertHorariosBulk(params: {
   });
 }
 
+// ── Turnos puntuales ─────────────────────────────────────────────────────────
+// Un turno de UNA fecha exacta, además del patrón semanal recurrente de
+// horarios_empleado — para empleados que trabajan un día que no sigue un
+// patrón semanal fijo (ej. "domingo sí, domingo no"). Se suman al horario
+// semanal, no lo reemplazan: calcularCumplimiento/calcularAusencias/
+// calcularLiquidacion los tratan igual que un horario recurrente pero
+// matcheando por fecha exacta en vez de día de semana (ver esos comentarios).
+
+export interface TurnoPuntual {
+  id: number;
+  empleado_id: number;
+  empleado_nombre: string;
+  sucursal_id: number | null;
+  sucursal_nombre: string | null;
+  fecha: string;
+  hora_inicio: string;
+  hora_fin: string;
+  tolerancia_min: number | null;
+  nota: string | null;
+  created_at: number;
+}
+
+export function listTurnosPuntuales(filters: { empleadoId?: number; desde?: string; hasta?: string } = {}): TurnoPuntual[] {
+  const condiciones: string[] = [];
+  const params: (string | number)[] = [];
+  if (filters.empleadoId !== undefined) {
+    condiciones.push("p.empleado_id = ?");
+    params.push(filters.empleadoId);
+  }
+  if (filters.desde) {
+    condiciones.push("p.fecha >= ?");
+    params.push(filters.desde);
+  }
+  if (filters.hasta) {
+    condiciones.push("p.fecha <= ?");
+    params.push(filters.hasta);
+  }
+  const where = condiciones.length > 0 ? `WHERE ${condiciones.join(" AND ")}` : "";
+  return db
+    .prepare(
+      `SELECT p.id, p.empleado_id, e.nombre AS empleado_nombre,
+              p.sucursal_id, s.nombre AS sucursal_nombre,
+              p.fecha, p.hora_inicio, p.hora_fin, p.tolerancia_min, p.nota, p.created_at
+       FROM turnos_puntuales p
+       JOIN empleados e ON e.id = p.empleado_id
+       LEFT JOIN sucursales s ON s.id = p.sucursal_id
+       ${where}
+       ORDER BY p.fecha DESC, p.hora_inicio ASC`
+    )
+    .all(...params) as unknown as TurnoPuntual[];
+}
+
+export function getTurnoPuntual(id: number): TurnoPuntual | null {
+  return (
+    (db
+      .prepare(
+        `SELECT p.id, p.empleado_id, e.nombre AS empleado_nombre,
+                p.sucursal_id, s.nombre AS sucursal_nombre,
+                p.fecha, p.hora_inicio, p.hora_fin, p.tolerancia_min, p.nota, p.created_at
+         FROM turnos_puntuales p
+         JOIN empleados e ON e.id = p.empleado_id
+         LEFT JOIN sucursales s ON s.id = p.sucursal_id
+         WHERE p.id = ?`
+      )
+      .get(id) as unknown as TurnoPuntual | undefined) ?? null
+  );
+}
+
+export function crearTurnoPuntual(data: {
+  empleadoId: number;
+  sucursalId?: number | null;
+  fecha: string;
+  horaInicio: string;
+  horaFin: string;
+  toleranciaMin?: number | null;
+  nota?: string | null;
+}): TurnoPuntual {
+  const info = db
+    .prepare(
+      `INSERT INTO turnos_puntuales (empleado_id, sucursal_id, fecha, hora_inicio, hora_fin, tolerancia_min, nota)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      data.empleadoId,
+      data.sucursalId ?? null,
+      data.fecha,
+      data.horaInicio,
+      data.horaFin,
+      data.toleranciaMin ?? null,
+      data.nota ?? null
+    );
+  return getTurnoPuntual(Number(info.lastInsertRowid))!;
+}
+
+export function eliminarTurnoPuntual(id: number): boolean {
+  const info = db.prepare("DELETE FROM turnos_puntuales WHERE id = ?").run(id);
+  return info.changes > 0;
+}
+
 // ── Plantillas de turno ──────────────────────────────────────────────────────
 // Un "molde" con nombre reutilizable (hora_inicio/hora_fin + opcionalmente los
 // días habituales) para no tener que tipear el horario cada vez al asignar
@@ -1774,9 +1917,11 @@ export interface CumplimientoRow {
   sucursal_nombre: string;
   fecha: string;
   entrada_real: number;
+  entrada_id: number;
   entrada_esperada: string | null;
   diff_entrada_min: number | null;
   salida_real: number | null;
+  salida_id: number | null;
   salida_esperada: string | null;
   diff_salida_min: number | null;
   en_curso: boolean;
@@ -1820,6 +1965,11 @@ export function calcularCumplimiento(filters?: {
   // turno solo filtra la lista, ya chica, de su propio empleado).
   const horariosPorEmpleado = groupBy(horarios, (h) => normKey(h.empleado_nombre));
 
+  // Turnos puntuales (fecha exacta, ej. "domingo por medio") — se identifican
+  // con horario_id negativo (-id) para no chocar con horarios_empleado.id, y
+  // matchean por fecha exacta en vez de día de semana.
+  const puntualesPorEmpleado = groupBy(listTurnosPuntuales(), (p) => normKey(p.empleado_nombre));
+
   return turnos.map((t): CumplimientoRow => {
     const dia = diaSemanaAR(t.entrada_at);
     const diaAnterior = (dia + 6) % 7;
@@ -1843,7 +1993,15 @@ export function calcularCumplimiento(filters?: {
     const candidatosAyerNocturno = horariosEmp
       .filter((h) => h.dia_semana === diaAnterior && horaAMinutos(h.hora_fin) <= horaAMinutos(h.hora_inicio))
       .map((h) => ({ h, diff: entradaMin + 1440 - horaAMinutos(h.hora_inicio) }));
-    const candidatos = [...candidatosHoy, ...candidatosAyerNocturno];
+    const fechaTurnoAR = fechaAR(t.entrada_at);
+    const puntualesEmp = puntualesPorEmpleado.get(normKey(t.nombre)) ?? [];
+    const candidatosPuntuales = puntualesEmp
+      .filter((p) => p.fecha === fechaTurnoAR)
+      .map((p) => ({
+        h: { horario_id: -p.id, dia_semana: dia, hora_inicio: p.hora_inicio, hora_fin: p.hora_fin, tolerancia_min: p.tolerancia_min },
+        diff: entradaMin - horaAMinutos(p.hora_inicio),
+      }));
+    const candidatos = [...candidatosHoy, ...candidatosAyerNocturno, ...candidatosPuntuales];
 
     if (candidatos.length === 0) {
       return {
@@ -1851,9 +2009,11 @@ export function calcularCumplimiento(filters?: {
         sucursal_nombre: t.sucursal_nombre,
         fecha: fechaAR(t.entrada_at),
         entrada_real: t.entrada_at,
+        entrada_id: t.entrada_id,
         entrada_esperada: null,
         diff_entrada_min: null,
         salida_real: t.salida_at,
+        salida_id: t.salida_id,
         salida_esperada: null,
         diff_salida_min: null,
         en_curso: enCurso,
@@ -1895,9 +2055,11 @@ export function calcularCumplimiento(filters?: {
       sucursal_nombre: t.sucursal_nombre,
       fecha: fechaTurno,
       entrada_real: t.entrada_at,
+      entrada_id: t.entrada_id,
       entrada_esperada: horario.hora_inicio,
       diff_entrada_min: diffEntrada,
       salida_real: t.salida_at,
+      salida_id: t.salida_id,
       salida_esperada: horario.hora_fin,
       diff_salida_min: diffSalida,
       en_curso: enCurso,
@@ -1948,6 +2110,7 @@ function duracionHorarioHoras(horaInicio: string, horaFin: string): number {
 
 export interface AusenciaRow {
   empleado_nombre: string;
+  sucursal_nombre: string | null;
   fecha: string;
   hora_inicio: string;
   hora_fin: string;
@@ -1967,9 +2130,11 @@ export function calcularAusencias(filters: { desde: string; hasta: string; nombr
   );
 
   let query = `
-    SELECT h.id AS horario_id, h.dia_semana, h.hora_inicio, h.hora_fin, e.nombre AS empleado_nombre
+    SELECT h.id AS horario_id, h.dia_semana, h.hora_inicio, h.hora_fin, e.nombre AS empleado_nombre,
+           s.nombre AS sucursal_nombre
     FROM horarios_empleado h
     JOIN empleados e ON e.id = h.empleado_id
+    LEFT JOIN sucursales s ON s.id = h.sucursal_id
     WHERE e.activo = 1
   `;
   const params: string[] = [];
@@ -1983,7 +2148,14 @@ export function calcularAusencias(filters: { desde: string; hasta: string; nombr
     hora_inicio: string;
     hora_fin: string;
     empleado_nombre: string;
+    sucursal_nombre: string | null;
   }[];
+
+  // Turnos puntuales dentro del rango — mismo tratamiento que un horario
+  // recurrente pero por fecha exacta (ver calcularCumplimiento).
+  const puntuales = listTurnosPuntuales({ desde: filters.desde, hasta: filters.hasta }).filter(
+    (p) => !filters.nombres || filters.nombres.length === 0 || filters.nombres.includes(p.empleado_nombre)
+  );
 
   const reportadas = getAusenciasReportadas(filters.desde, filters.hasta);
   const rangosPorEmpleado = new Map<string, { fecha_inicio: string; fecha_fin: string }[]>();
@@ -2014,6 +2186,7 @@ export function calcularAusencias(filters: { desde: string; hasta: string; nombr
       if (cubiertos.has(key)) continue;
       ausencias.push({
         empleado_nombre: h.empleado_nombre,
+        sucursal_nombre: h.sucursal_nombre,
         fecha,
         hora_inicio: h.hora_inicio,
         hora_fin: h.hora_fin,
@@ -2022,6 +2195,23 @@ export function calcularAusencias(filters: { desde: string; hasta: string; nombr
       });
     }
   }
+
+  for (const p of puntuales) {
+    if (p.fecha > hoyAR) continue;
+    if (p.fecha === hoyAR && horaAMinutos(p.hora_inicio) > minutosAhoraAR) continue;
+    const key = `${normKey(p.empleado_nombre)}|${-p.id}|${p.fecha}`;
+    if (cubiertos.has(key)) continue;
+    ausencias.push({
+      empleado_nombre: p.empleado_nombre,
+      sucursal_nombre: p.sucursal_nombre,
+      fecha: p.fecha,
+      hora_inicio: p.hora_inicio,
+      hora_fin: p.hora_fin,
+      horas: duracionHorarioHoras(p.hora_inicio, p.hora_fin),
+      justificada: esJustificada(p.empleado_nombre, p.fecha),
+    });
+  }
+
   return ausencias;
 }
 
@@ -2104,6 +2294,7 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
   const cumplimiento = calcularCumplimiento(filters);
   const ausencias = calcularAusencias(filters);
   const horarios = listHorarios();
+  const puntuales = listTurnosPuntuales({ desde: filters.desde, hasta: filters.hasta });
 
   // Agrupado una sola vez por empleado — evita recorrer estos 4 arrays
   // completos (de TODO el período/toda la empresa) dentro del `.map()` de
@@ -2113,6 +2304,7 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
   const horariosPorEmpleado = groupBy(horarios, (h) => normKey(h.empleado_nombre));
   const cumplimientoPorEmpleado = groupBy(cumplimiento, (c) => normKey(c.nombre));
   const ausenciasPorEmpleado = groupBy(ausencias, (a) => normKey(a.empleado_nombre));
+  const puntualesPorEmpleado = groupBy(puntuales, (p) => normKey(p.empleado_nombre));
 
   const ocurrenciasPorDia = new Map<number, number>();
   function ocurrencias(dia: number): number {
@@ -2169,6 +2361,7 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
 
     if (emp.tipo_pago === "dia") {
       const horariosEmp = horariosPorEmpleado.get(key) ?? [];
+      const puntualesEmp = puntualesPorEmpleado.get(key) ?? [];
       const turnosEmp = turnosPorEmpleado.get(key) ?? [];
       const turnosCerrados = turnosEmp.filter((t) => t.horas !== null);
       const horasEnCurso = turnosEmp.some((t) => t.horas === null);
@@ -2177,9 +2370,10 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
       if (!emp.valor_dia) advertencias.push("Sin valor por día configurado");
       if (!emp.valor_hora) advertencias.push("Sin valor hora configurado (necesario para horas extra)");
 
-      // Sin ningún horario cargado no hay forma de saber qué es "jornal normal"
-      // vs "hora extra" — se paga directo por hora trabajada, como tipo 'hora'.
-      if (horariosEmp.length === 0) {
+      // Sin ningún horario cargado (ni recurrente ni puntual) no hay forma de
+      // saber qué es "jornal normal" vs "hora extra" — se paga directo por
+      // hora trabajada, como tipo 'hora'.
+      if (horariosEmp.length === 0 && puntualesEmp.length === 0) {
         return {
           empleado_id: emp.id,
           nombre: emp.nombre,
@@ -2219,6 +2413,16 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
           (horasPactadasPorDiaSemana.get(h.dia_semana) ?? 0) + duracionHorarioHoras(h.hora_inicio, h.hora_fin)
         );
       }
+      // Turno puntual en una fecha exacta (ej. "domingo por medio") pisa el
+      // día de semana para ESA fecha — se paga jornal completo igual que un
+      // día del patrón semanal, no directo por hora.
+      const horasPactadasPorFechaPuntual = new Map<string, number>();
+      for (const p of puntualesEmp) {
+        horasPactadasPorFechaPuntual.set(
+          p.fecha,
+          (horasPactadasPorFechaPuntual.get(p.fecha) ?? 0) + duracionHorarioHoras(p.hora_inicio, p.hora_fin)
+        );
+      }
 
       const horasPorFecha = new Map<string, number>();
       for (const t of turnosCerrados) {
@@ -2231,7 +2435,7 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
       let total = 0;
       for (const [fecha, horasDia] of horasPorFecha) {
         const diaSemana = new Date(`${fecha}T00:00:00Z`).getUTCDay();
-        const horasPactadasDia = horasPactadasPorDiaSemana.get(diaSemana) ?? 0;
+        const horasPactadasDia = horasPactadasPorFechaPuntual.get(fecha) ?? horasPactadasPorDiaSemana.get(diaSemana) ?? 0;
         if (horasPactadasDia > 0) {
           diasTrabajados += 1;
           const extra = Math.max(0, horasDia - horasPactadasDia);
@@ -2277,10 +2481,10 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
 
     if (emp.tipo_pago === "mensual") {
       const horariosEmp = horariosPorEmpleado.get(key) ?? [];
-      const horasPactadas = horariosEmp.reduce(
-        (acc, h) => acc + ocurrencias(h.dia_semana) * duracionHorarioHoras(h.hora_inicio, h.hora_fin),
-        0
-      );
+      const puntualesEmp = puntualesPorEmpleado.get(key) ?? [];
+      const horasPactadas =
+        horariosEmp.reduce((acc, h) => acc + ocurrencias(h.dia_semana) * duracionHorarioHoras(h.hora_inicio, h.hora_fin), 0) +
+        puntualesEmp.reduce((acc, p) => acc + duracionHorarioHoras(p.hora_inicio, p.hora_fin), 0);
       const valorHoraEquivalente = horasPactadas > 0 && emp.sueldo_mensual ? emp.sueldo_mensual / horasPactadas : null;
 
       const cRows = cumplimientoPorEmpleado.get(key) ?? [];
