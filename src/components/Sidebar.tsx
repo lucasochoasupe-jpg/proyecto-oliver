@@ -11,6 +11,7 @@ const NAV_LINKS = [
   { href: "/sucursales", label: "Sucursales y QR", icon: "🏬" },
   { href: "/rrhh", label: "Panel RRHH", icon: "🗂" },
   { href: "/liquidacion", label: "Liquidación", icon: "💵" },
+  { href: "/adelantos", label: "Adelantos", icon: "💸" },
   { href: "/legajos", label: "Legajos", icon: "📁" },
   { href: "/", label: "Chat", icon: "💬" },
 ];

@@ -20,6 +20,11 @@ interface ApiResponse {
 
 const SUCURSALES = ["Todas", "Fraga", "Campbell", "Mendoza", "Avenida", "Donado", "Montevideo", "Terminal"];
 const MOTIVOS = ["Todos", "Enfermedad", "Motivo Personal", "Vacaciones", "Urgencia", "Otro"];
+const CATEGORIAS_MANUALES = ["Vacaciones", "Enfermedad", "Motivo Personal"] as const;
+
+function hoyISO() {
+  return new Date().toLocaleDateString("sv-SE", { timeZone: "America/Argentina/Buenos_Aires" });
+}
 
 function formatDate(unix: number) {
   return new Date(unix * 1000).toLocaleDateString("es-AR", {
@@ -81,6 +86,20 @@ export default function RRHHPage() {
   const [detalle, setDetalle] = useState<AusenciaRecord | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
 
+  // Carga manual
+  const [mostrarForm, setMostrarForm] = useState(false);
+  const [empleados, setEmpleados] = useState<{ id: number; nombre: string; activo: number }[]>([]);
+  const [nuevoEmpleadoId, setNuevoEmpleadoId] = useState("");
+  const [nuevaSucursal, setNuevaSucursal] = useState("");
+  const [nuevaCategoria, setNuevaCategoria] = useState<(typeof CATEGORIAS_MANUALES)[number]>("Vacaciones");
+  const [nuevaFechaInicio, setNuevaFechaInicio] = useState(hoyISO());
+  const [nuevaFechaFin, setNuevaFechaFin] = useState(hoyISO());
+  const [nuevoCertificado, setNuevoCertificado] = useState(true);
+  const [nuevaNota, setNuevaNota] = useState("");
+  const [guardandoManual, setGuardandoManual] = useState(false);
+  const [errorManual, setErrorManual] = useState("");
+  const [avisoManual, setAvisoManual] = useState("");
+
   const fetchData = useCallback(async () => {
     try {
       const res = await fetch("/api/rrhh");
@@ -101,6 +120,47 @@ export default function RRHHPage() {
     const id = setInterval(fetchData, 30_000);
     return () => clearInterval(id);
   }, [fetchData]);
+
+  useEffect(() => {
+    fetch("/api/empleados")
+      .then((r) => r.json())
+      .then((data: { id: number; nombre: string; activo: number }[]) => setEmpleados(data.filter((e) => e.activo)));
+  }, []);
+
+  async function cargarManual(e: React.FormEvent) {
+    e.preventDefault();
+    setErrorManual("");
+    setAvisoManual("");
+    if (!nuevoEmpleadoId) { setErrorManual("Elegí un empleado"); return; }
+    if (!nuevaFechaInicio || !nuevaFechaFin || nuevaFechaInicio > nuevaFechaFin) {
+      setErrorManual("El rango de fechas es inválido");
+      return;
+    }
+    setGuardandoManual(true);
+    const res = await fetch("/api/rrhh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        empleadoId: Number(nuevoEmpleadoId),
+        categoria: nuevaCategoria,
+        sucursal: nuevaSucursal || null,
+        fechaInicio: nuevaFechaInicio,
+        fechaFin: nuevaFechaFin,
+        certificadoPendiente: nuevaCategoria === "Enfermedad" ? !nuevoCertificado : false,
+        nota: nuevaNota,
+      }),
+    });
+    setGuardandoManual(false);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      setErrorManual(body.error ?? "No se pudo cargar el pedido");
+      return;
+    }
+    const body = (await res.json()) as { advertencia: string | null };
+    if (body.advertencia) setAvisoManual(body.advertencia);
+    setNuevaNota("");
+    fetchData();
+  }
 
   const ausenciasFiltradas = (data?.ausencias ?? []).filter((a) => {
     if (sucursalFiltro !== "Todas" && a.sucursal !== sucursalFiltro) return false;
@@ -139,6 +199,12 @@ export default function RRHHPage() {
           <h1 className="text-xl font-bold text-[#2C1810]">Ausentismo y Novedades</h1>
           <div className="flex items-center gap-2 flex-wrap">
             <button
+              onClick={() => { setMostrarForm((v) => !v); setErrorManual(""); setAvisoManual(""); }}
+              className="text-xs text-white bg-[#2C1810] hover:bg-[#3D2418] px-3 py-1 rounded-full transition-colors font-medium"
+            >
+              {mostrarForm ? "✕ Cerrar" : "+ Cargar manualmente"}
+            </button>
+            <button
               onClick={fetchData}
               className="text-xs text-[#8B6347] hover:text-[#2C1810] border border-[#D4A843] hover:border-[#2C1810] px-3 py-1 rounded-full active:scale-95 transition-colors"
             >
@@ -153,6 +219,99 @@ export default function RRHHPage() {
             </button>
           </div>
         </div>
+
+        {mostrarForm && (
+          <form onSubmit={cargarManual} className="bg-white rounded-xl border border-[#EDE0CC] p-4 space-y-3">
+            <h2 className="font-semibold text-[#2C1810] text-sm">Cargar pedido manualmente</h2>
+            <p className="text-xs text-[#8B6347]">
+              Para cuando el empleado avisó de forma presencial y no por WhatsApp. Afecta el saldo de vacaciones y la liquidación igual que un pedido por el bot.
+            </p>
+            <div className="flex flex-wrap gap-3 items-end">
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-[#8B6347] font-medium">Empleado</label>
+                <select
+                  value={nuevoEmpleadoId}
+                  onChange={(e) => setNuevoEmpleadoId(e.target.value)}
+                  className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-48"
+                >
+                  <option value="">Elegir...</option>
+                  {empleados.map((e) => (
+                    <option key={e.id} value={e.id}>{e.nombre}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-[#8B6347] font-medium">Categoría</label>
+                <select
+                  value={nuevaCategoria}
+                  onChange={(e) => setNuevaCategoria(e.target.value as (typeof CATEGORIAS_MANUALES)[number])}
+                  className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                >
+                  {CATEGORIAS_MANUALES.map((c) => <option key={c}>{c}</option>)}
+                </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-[#8B6347] font-medium">Sucursal</label>
+                <select
+                  value={nuevaSucursal}
+                  onChange={(e) => setNuevaSucursal(e.target.value)}
+                  className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                >
+                  <option value="">Sin especificar</option>
+                  {SUCURSALES.filter((s) => s !== "Todas").map((s) => <option key={s}>{s}</option>)}
+                </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-[#8B6347] font-medium">Desde</label>
+                <input
+                  type="date"
+                  value={nuevaFechaInicio}
+                  onChange={(e) => setNuevaFechaInicio(e.target.value)}
+                  className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-[#8B6347] font-medium">Hasta</label>
+                <input
+                  type="date"
+                  value={nuevaFechaFin}
+                  onChange={(e) => setNuevaFechaFin(e.target.value)}
+                  className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                />
+              </div>
+              {nuevaCategoria === "Enfermedad" && (
+                <label className="flex items-center gap-2 cursor-pointer select-none pb-1.5">
+                  <input
+                    type="checkbox"
+                    checked={nuevoCertificado}
+                    onChange={(e) => setNuevoCertificado(e.target.checked)}
+                    className="accent-[#D4A843] w-4 h-4"
+                  />
+                  <span className="text-sm text-[#2C1810]">Ya presentó el certificado</span>
+                </label>
+              )}
+            </div>
+            <div>
+              <label className="text-xs text-[#8B6347] font-medium block mb-1">Nota (opcional)</label>
+              <input
+                type="text"
+                placeholder="Ej: avisó de forma presencial"
+                value={nuevaNota}
+                onChange={(e) => setNuevaNota(e.target.value)}
+                className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-full max-w-md"
+              />
+            </div>
+            {errorManual && <p className="text-xs text-red-500">{errorManual}</p>}
+            {avisoManual && <p className="text-xs text-amber-600">⚠ {avisoManual}</p>}
+            <button
+              type="submit"
+              disabled={guardandoManual}
+              className="text-sm text-white bg-[#2C1810] hover:bg-[#3D2418] disabled:opacity-50 px-4 py-1.5 rounded-lg font-medium active:scale-95 transition-colors"
+            >
+              {guardandoManual ? "Guardando..." : "Cargar pedido"}
+            </button>
+          </form>
+        )}
 
         {/* Cards resumen */}
         {data && (
@@ -298,7 +457,14 @@ export default function RRHHPage() {
                     key={a.id}
                     className={`border-b border-[#EDE0CC] hover:bg-[#FAF7F2] transition-colors ${i % 2 === 0 ? "" : "bg-[#FDFAF6]"}`}
                   >
-                    <td className="px-4 py-3 font-medium text-[#2C1810]" data-label="Empleado">{a.nombre}</td>
+                    <td className="px-4 py-3 font-medium text-[#2C1810]" data-label="Empleado">
+                      {a.nombre}
+                      {a.origen === "manual" && (
+                        <span className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
+                          Carga manual
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-[#5C3D2E]" data-label="Sucursal">{a.sucursal}</td>
                     <td className="px-4 py-3" data-label="Tipo"><BadgeMotivo motivo={a.motivo} /></td>
                     <td className="px-4 py-3 text-[#8B6347] whitespace-nowrap" data-label="Fecha">

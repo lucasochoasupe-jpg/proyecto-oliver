@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
-import db from "@/lib/db";
+import { NextRequest, NextResponse } from "next/server";
+import db, { calcularSaldoVacaciones, crearAusenciaReportada, getEmpleadoById, listAusenciasManuales } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +15,14 @@ export interface AusenciaRecord {
   certificadoRecibidoEn: number | null; // unix timestamp, si ya se resolvió
   fecha: number; // unix timestamp
   raw: string;
+  origen?: "manual"; // ausente = viene del bot (aviso de WhatsApp)
+}
+
+const CATEGORIAS_MANUALES = ["Vacaciones", "Enfermedad", "Motivo Personal"] as const;
+type CategoriaManual = (typeof CATEGORIAS_MANUALES)[number];
+
+function formatFechaCorta(iso: string): string {
+  return new Date(`${iso}T00:00:00Z`).toLocaleDateString("es-AR", { timeZone: "UTC", day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
 function parseAdminBlock(
@@ -93,6 +101,31 @@ export async function GET() {
       });
     }
 
+    // Cargas manuales (admin, sin pasar por WhatsApp) — mismo `ausencias_reportadas`
+    // que alimenta saldo de vacaciones y liquidación, ver [[crearAusenciaReportada]].
+    // Se identifican con id negativo para no chocar con ids de mensajes.
+    for (const a of listAusenciasManuales()) {
+      const rango =
+        a.fecha_inicio === a.fecha_fin
+          ? ` el ${formatFechaCorta(a.fecha_inicio)}`
+          : ` del ${formatFechaCorta(a.fecha_inicio)} al ${formatFechaCorta(a.fecha_fin)}`;
+      ausencias.push({
+        id: -a.id,
+        phone: a.phone ?? "",
+        nombre: a.empleado_nombre,
+        sucursal: a.sucursal ?? "—",
+        motivo: `${a.categoria}${rango}`,
+        detalle: a.nota || "Cargado manualmente por administración",
+        contacto: a.phone || "—",
+        certificadoPendiente: a.categoria === "Enfermedad" && !!a.certificado_pendiente,
+        certificadoRecibidoEn: null,
+        fecha: a.created_at,
+        raw: "",
+        origen: "manual",
+      });
+    }
+    ausencias.sort((a, b) => b.fecha - a.fecha);
+
     // Métricas resumen
     const totalAusencias = ausencias.length;
     const certificadosPendientes = ausencias.filter((a) => a.certificadoPendiente).length;
@@ -126,4 +159,57 @@ export async function GET() {
     console.error("[api/rrhh]", err);
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
+}
+
+export async function POST(req: NextRequest) {
+  const body = await req.json().catch(() => null);
+  const empleadoId = Number(body?.empleadoId);
+  const categoria = body?.categoria as string;
+  const fechaInicio = body?.fechaInicio as string;
+  const fechaFin = body?.fechaFin as string;
+  const sucursal = typeof body?.sucursal === "string" && body.sucursal.trim() ? body.sucursal.trim() : null;
+  const nota = typeof body?.nota === "string" && body.nota.trim() ? body.nota.trim() : null;
+  const certificadoPendiente = categoria === "Enfermedad" && body?.certificadoPendiente === true;
+
+  if (!empleadoId || !Number.isFinite(empleadoId)) {
+    return NextResponse.json({ error: "Falta el empleado" }, { status: 400 });
+  }
+  const empleado = getEmpleadoById(empleadoId);
+  if (!empleado) {
+    return NextResponse.json({ error: "Empleado no encontrado" }, { status: 404 });
+  }
+  if (!CATEGORIAS_MANUALES.includes(categoria as CategoriaManual)) {
+    return NextResponse.json({ error: "Categoría inválida" }, { status: 400 });
+  }
+  if (!fechaInicio || !fechaFin || fechaInicio > fechaFin) {
+    return NextResponse.json({ error: "El rango de fechas es inválido" }, { status: 400 });
+  }
+
+  const id = crearAusenciaReportada({
+    empleadoNombre: empleado.nombre,
+    categoria,
+    fechaInicio,
+    fechaFin,
+    certificadoPendiente,
+    phone: empleado.celular ?? "",
+    adminMessageId: null,
+    sucursal,
+    nota,
+  });
+
+  // Mismo chequeo no bloqueante que hace el bot al recibir un pedido de
+  // vacaciones — avisa si excede el saldo, pero igual carga el registro.
+  let advertencia: string | null = null;
+  if (categoria === "Vacaciones") {
+    const diasPedidos = new Date(`${fechaFin}T00:00:00Z`).getTime() >= new Date(`${fechaInicio}T00:00:00Z`).getTime()
+      ? Math.round((new Date(`${fechaFin}T00:00:00Z`).getTime() - new Date(`${fechaInicio}T00:00:00Z`).getTime()) / 86400000) + 1
+      : 0;
+    const anioPedido = Number(fechaInicio.slice(0, 4));
+    const saldoInfo = calcularSaldoVacaciones(anioPedido).find((s) => s.nombre === empleado.nombre);
+    if (saldoInfo && saldoInfo.saldo !== null && diasPedidos > saldoInfo.saldo) {
+      advertencia = `${empleado.nombre} pide ${diasPedidos} días pero le quedan ${saldoInfo.saldo} de saldo en ${anioPedido}.`;
+    }
+  }
+
+  return NextResponse.json({ id: -id, advertencia }, { status: 201 });
 }

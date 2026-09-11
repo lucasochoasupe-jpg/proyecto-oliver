@@ -23,6 +23,9 @@ try { db.exec("ALTER TABLE empleados ADD COLUMN sueldo_mensual REAL"); } catch {
 try { db.exec("ALTER TABLE empleados ADD COLUMN valor_hora REAL"); } catch {}
 try { db.exec("ALTER TABLE empleados ADD COLUMN valor_dia REAL"); } catch {}
 try { db.exec("ALTER TABLE empleados ADD COLUMN fecha_ingreso TEXT"); } catch {}
+try { db.exec("ALTER TABLE empleados ADD COLUMN sueldo_estimado REAL"); } catch {}
+try { db.exec("ALTER TABLE ausencias_reportadas ADD COLUMN sucursal TEXT"); } catch {}
+try { db.exec("ALTER TABLE ausencias_reportadas ADD COLUMN nota TEXT"); } catch {}
 
 // La nómina inicial solo debe cargarse la primera vez que se crea la base
 // (instalación nueva) — si corriera en cada arranque, un empleado borrado desde
@@ -211,6 +214,18 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_legajo_archivos_empleado
     ON legajo_archivos(empleado_id, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS adelantos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    empleado_id INTEGER NOT NULL REFERENCES empleados(id),
+    fecha TEXT NOT NULL,
+    monto REAL NOT NULL,
+    nota TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_adelantos_empleado_fecha
+    ON adelantos(empleado_id, fecha);
 
   CREATE TABLE IF NOT EXISTS lid_phone (
     lid TEXT PRIMARY KEY,
@@ -657,6 +672,9 @@ export interface AusenciaReportada {
   fecha_fin: string;
   certificado_pendiente: number;
   phone: string | null;
+  sucursal: string | null;
+  nota: string | null;
+  admin_message_id: number | null;
   created_at: number;
 }
 
@@ -668,20 +686,43 @@ export function crearAusenciaReportada(data: {
   certificadoPendiente: boolean;
   phone: string;
   adminMessageId: number | null;
-}): void {
-  db.prepare(
-    `INSERT INTO ausencias_reportadas
-       (empleado_nombre, categoria, fecha_inicio, fecha_fin, certificado_pendiente, phone, admin_message_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    data.empleadoNombre,
-    data.categoria,
-    data.fechaInicio,
-    data.fechaFin,
-    data.certificadoPendiente ? 1 : 0,
-    data.phone,
-    data.adminMessageId
-  );
+  sucursal?: string | null;
+  nota?: string | null;
+}): number {
+  const info = db
+    .prepare(
+      `INSERT INTO ausencias_reportadas
+         (empleado_nombre, categoria, fecha_inicio, fecha_fin, certificado_pendiente, phone, admin_message_id, sucursal, nota)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      data.empleadoNombre,
+      data.categoria,
+      data.fechaInicio,
+      data.fechaFin,
+      data.certificadoPendiente ? 1 : 0,
+      data.phone,
+      data.adminMessageId,
+      data.sucursal ?? null,
+      data.nota ?? null
+    );
+  return Number(info.lastInsertRowid);
+}
+
+// Cargas manuales (hechas por el admin desde el panel de RRHH, no por el bot)
+// — se distinguen porque no tienen admin_message_id (el bot siempre lo setea,
+// ver rrhh-flow.ts). El panel de RRHH las mezcla con los avisos del bot.
+export function listAusenciasManuales(): AusenciaReportada[] {
+  return db
+    .prepare(
+      `SELECT * FROM ausencias_reportadas WHERE admin_message_id IS NULL ORDER BY created_at DESC`
+    )
+    .all() as unknown as AusenciaReportada[];
+}
+
+export function eliminarAusenciaReportadaManual(id: number): boolean {
+  const info = db.prepare("DELETE FROM ausencias_reportadas WHERE id = ? AND admin_message_id IS NULL").run(id);
+  return info.changes > 0;
 }
 
 // Avisos cuyo rango [fecha_inicio, fecha_fin] se solapa con [desde, hasta].
@@ -773,6 +814,109 @@ export function getLegajoArchivo(id: number): LegajoArchivo | null {
 
 export function rutaLegajoArchivo(archivo: LegajoArchivo): string {
   return path.join(carpetaLegajo(archivo.empleado_id), archivo.nombre_archivo);
+}
+
+export interface Adelanto {
+  id: number;
+  empleado_id: number;
+  empleado_nombre: string;
+  fecha: string;
+  monto: number;
+  nota: string | null;
+  created_at: number;
+}
+
+export function crearAdelanto(data: { empleadoId: number; fecha: string; monto: number; nota?: string | null }): Adelanto {
+  const info = db
+    .prepare(`INSERT INTO adelantos (empleado_id, fecha, monto, nota) VALUES (?, ?, ?, ?)`)
+    .run(data.empleadoId, data.fecha, data.monto, data.nota ?? null);
+  return getAdelanto(Number(info.lastInsertRowid))!;
+}
+
+export function getAdelanto(id: number): Adelanto | null {
+  return (
+    (db
+      .prepare(
+        `SELECT a.*, e.nombre AS empleado_nombre
+         FROM adelantos a JOIN empleados e ON e.id = a.empleado_id
+         WHERE a.id = ?`
+      )
+      .get(id) as unknown as Adelanto | undefined) ?? null
+  );
+}
+
+export function listAdelantos(filters: { desde?: string; hasta?: string; empleadoId?: number } = {}): Adelanto[] {
+  const condiciones: string[] = [];
+  const params: (string | number)[] = [];
+  if (filters.desde) {
+    condiciones.push("a.fecha >= ?");
+    params.push(filters.desde);
+  }
+  if (filters.hasta) {
+    condiciones.push("a.fecha <= ?");
+    params.push(filters.hasta);
+  }
+  if (filters.empleadoId) {
+    condiciones.push("a.empleado_id = ?");
+    params.push(filters.empleadoId);
+  }
+  const where = condiciones.length > 0 ? `WHERE ${condiciones.join(" AND ")}` : "";
+  return db
+    .prepare(
+      `SELECT a.*, e.nombre AS empleado_nombre
+       FROM adelantos a JOIN empleados e ON e.id = a.empleado_id
+       ${where}
+       ORDER BY a.fecha DESC, a.created_at DESC`
+    )
+    .all(...params) as unknown as Adelanto[];
+}
+
+export function eliminarAdelanto(id: number): boolean {
+  const info = db.prepare("DELETE FROM adelantos WHERE id = ?").run(id);
+  return info.changes > 0;
+}
+
+const TOPE_ADELANTO_PORCENTAJE = 0.2;
+
+// Base sobre la que se calcula el tope de adelantos: el sueldo mensual para
+// empleados mensuales, o el sueldo estimado que carga el admin para empleados
+// por hora/día (que no tienen un sueldo fijo del cual derivarlo).
+function sueldoBaseParaAdelantos(emp: Empleado): number | null {
+  return emp.tipo_pago === "mensual" ? emp.sueldo_mensual : emp.sueldo_estimado;
+}
+
+function limitesDelMes(fecha: string): { desde: string; hasta: string } {
+  const [anio, mes] = fecha.split("-").map(Number);
+  const desde = `${fecha.slice(0, 7)}-01`;
+  const ultimoDia = new Date(Date.UTC(anio, mes, 0)).getUTCDate();
+  const hasta = `${fecha.slice(0, 7)}-${String(ultimoDia).padStart(2, "0")}`;
+  return { desde, hasta };
+}
+
+export interface TopeAdelantoInfo {
+  base: number | null; // sueldo (mensual o estimado) usado para calcular el tope; null si no está configurado
+  limite: number | null; // 20% de la base
+  usado: number; // suma de adelantos ya cargados en el mes de `fecha` (sin contar uno nuevo)
+  disponible: number | null;
+  excedido: boolean; // usado ya supera el límite, incluso antes de un nuevo adelanto
+}
+
+// Estado del tope del 20% mensual para un empleado, a la fecha dada — se usa
+// tanto para validar un adelanto nuevo como para mostrarlo de referencia en el
+// formulario antes de cargarlo.
+export function calcularTopeAdelanto(empleadoId: number, fecha: string): TopeAdelantoInfo {
+  const emp = getEmpleadoById(empleadoId);
+  const base = emp ? sueldoBaseParaAdelantos(emp) : null;
+  const limite = base !== null ? base * TOPE_ADELANTO_PORCENTAJE : null;
+  const { desde, hasta } = limitesDelMes(fecha);
+  const usado = listAdelantos({ empleadoId, desde, hasta }).reduce((acc, a) => acc + a.monto, 0);
+  return {
+    base,
+    limite,
+    usado,
+    disponible: limite !== null ? limite - usado : null,
+    excedido: limite !== null && usado > limite,
+  };
 }
 
 export function eliminarLegajoArchivo(id: number): boolean {
@@ -887,6 +1031,7 @@ export interface Empleado {
   valor_hora: number | null;
   valor_dia: number | null;
   fecha_ingreso: string | null; // ISO (YYYY-MM-DD) — usada para calcular el saldo de vacaciones
+  sueldo_estimado: number | null; // solo tipo 'hora'/'dia' — referencia para el tope de adelantos (no tienen sueldo_mensual)
 }
 
 function sameWords(a: string[], b: string[]): boolean {
@@ -988,12 +1133,13 @@ export function updateEmpleado(
     valor_hora?: number | null;
     valor_dia?: number | null;
     fecha_ingreso?: string | null;
+    sueldo_estimado?: number | null;
   }
 ): void {
   const current = db.prepare("SELECT * FROM empleados WHERE id = ?").get(id) as unknown as Empleado | undefined;
   if (!current) return;
   db.prepare(
-    "UPDATE empleados SET nombre = ?, celular = ?, jid = ?, activo = ?, tipo_pago = ?, sueldo_mensual = ?, valor_hora = ?, valor_dia = ?, fecha_ingreso = ? WHERE id = ?"
+    "UPDATE empleados SET nombre = ?, celular = ?, jid = ?, activo = ?, tipo_pago = ?, sueldo_mensual = ?, valor_hora = ?, valor_dia = ?, fecha_ingreso = ?, sueldo_estimado = ? WHERE id = ?"
   ).run(
     patch.nombre ?? current.nombre,
     patch.celular !== undefined ? patch.celular : current.celular,
@@ -1004,6 +1150,7 @@ export function updateEmpleado(
     patch.valor_hora !== undefined ? patch.valor_hora : current.valor_hora,
     patch.valor_dia !== undefined ? patch.valor_dia : current.valor_dia,
     patch.fecha_ingreso !== undefined ? patch.fecha_ingreso : current.fecha_ingreso,
+    patch.sueldo_estimado !== undefined ? patch.sueldo_estimado : current.sueldo_estimado,
     id
   );
 }
@@ -1908,6 +2055,7 @@ export interface LiquidacionEmpleado {
   dias_trabajados: number | null; // solo tipo 'dia', con horario cargado
   horas_extra: number | null; // solo tipo 'dia', con horario cargado: horas por encima de lo pactado ese día
   total_por_horas: number | null; // horas_trabajadas × valor_hora — referencia para comparar contra 'total' (mensual y dia)
+  adelantos: number; // suma de adelantos cargados con fecha dentro del período — se descuenta del total
   total: number;
   advertencias: string[];
 }
@@ -1974,9 +2122,18 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
     return ocurrenciasPorDia.get(dia)!;
   }
 
+  const adelantosPorEmpleado = groupBy(
+    listAdelantos({ desde: filters.desde, hasta: filters.hasta }),
+    (a) => String(a.empleado_id)
+  );
+  function adelantosDe(empleadoId: number): number {
+    return (adelantosPorEmpleado.get(String(empleadoId)) ?? []).reduce((acc, a) => acc + a.monto, 0);
+  }
+
   return empleados.map((emp): LiquidacionEmpleado => {
     const advertencias: string[] = [];
     const key = normKey(emp.nombre);
+    const adelantos = adelantosDe(emp.id);
 
     if (emp.tipo_pago === "hora") {
       const turnosEmp = turnosPorEmpleado.get(key) ?? [];
@@ -2004,7 +2161,8 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
         dias_trabajados: null,
         horas_extra: null,
         total_por_horas: horasTrabajadas * (emp.valor_hora ?? 0),
-        total: horasTrabajadas * (emp.valor_hora ?? 0),
+        adelantos,
+        total: horasTrabajadas * (emp.valor_hora ?? 0) - adelantos,
         advertencias,
       };
     }
@@ -2043,7 +2201,8 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
           dias_trabajados: null,
           horas_extra: null,
           total_por_horas: horasTrabajadasTotal * (emp.valor_hora ?? 0),
-          total: horasTrabajadasTotal * (emp.valor_hora ?? 0),
+          adelantos,
+          total: horasTrabajadasTotal * (emp.valor_hora ?? 0) - adelantos,
           advertencias,
         };
       }
@@ -2110,7 +2269,8 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
         dias_trabajados: diasTrabajados,
         horas_extra: horasExtra,
         total_por_horas: totalPorHoras,
-        total,
+        adelantos,
+        total: total - adelantos,
         advertencias,
       };
     }
@@ -2170,7 +2330,8 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
         dias_trabajados: null,
         horas_extra: null,
         total_por_horas: totalPorHoras,
-        total,
+        adelantos,
+        total: total - adelantos,
         advertencias,
       };
     }
@@ -2197,7 +2358,8 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
       dias_trabajados: null,
       horas_extra: null,
       total_por_horas: null,
-      total: 0,
+      adelantos,
+      total: -adelantos,
       advertencias,
     };
   });

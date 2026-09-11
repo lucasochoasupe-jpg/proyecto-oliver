@@ -1,12 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import PageHeader from "@/components/PageHeader";
 import EmpleadoMultiSelect from "@/components/EmpleadoMultiSelect";
 
 interface Empleado {
   id: number;
   nombre: string;
+  activo: number;
+  tipo_pago: "mensual" | "hora" | "dia" | null;
 }
 
 interface Sucursal {
@@ -116,6 +118,8 @@ export default function TurnosPage() {
   const [empleadoId, setEmpleadoId] = useState<number | null>(null);
   const [horarios, setHorarios] = useState<HorarioEmpleado[]>([]);
   const [loadingHorarios, setLoadingHorarios] = useState(false);
+  const [todosHorarios, setTodosHorarios] = useState<HorarioEmpleado[]>([]);
+  const verTurnosRef = useRef<HTMLDivElement>(null);
   const [editandoId, setEditandoId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState(emptyEditForm);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
@@ -123,6 +127,7 @@ export default function TurnosPage() {
 
   // ── Plantillas de turno ──
   const [mostrarNuevaPlantilla, setMostrarNuevaPlantilla] = useState(false);
+  const [mostrarListaPlantillas, setMostrarListaPlantillas] = useState(false);
   const [plantillaForm, setPlantillaForm] = useState<{
     nombre: string; hora_inicio: string; hora_fin: string; dias_semana: number[]; tolerancia_min: number | null;
   }>({
@@ -158,21 +163,28 @@ export default function TurnosPage() {
     setTemplates((await res.json()) as TurnoTemplate[]);
   }, []);
 
+  const fetchTodosHorarios = useCallback(async () => {
+    const res = await fetch("/api/horarios");
+    setTodosHorarios((await res.json()) as HorarioEmpleado[]);
+  }, []);
+
   useEffect(() => {
     fetch("/api/empleados")
       .then((r) => r.json())
       .then((data: Empleado[]) => {
-        setEmpleados(data);
-        if (data.length > 0) setEmpleadoId((prev) => prev ?? data[0].id);
+        setEmpleados(data.filter((e) => e.activo));
+        const activos = data.filter((e) => e.activo);
+        if (activos.length > 0) setEmpleadoId((prev) => prev ?? activos[0].id);
       });
     fetch("/api/sucursales")
       .then((r) => r.json())
       .then((data: Sucursal[]) => setSucursales(data));
     fetchTemplates();
+    fetchTodosHorarios();
     fetch("/api/settings/tolerancia")
       .then((r) => r.json())
       .then((data: { tolerancia_min: number }) => setTolerancia(data.tolerancia_min));
-  }, [fetchTemplates]);
+  }, [fetchTemplates, fetchTodosHorarios]);
 
   async function guardarTolerancia() {
     if (tolerancia === null) return;
@@ -241,12 +253,14 @@ export default function TurnosPage() {
     setGuardando(false);
     setEditandoId(null);
     fetchHorarios();
+    fetchTodosHorarios();
   }
 
   async function eliminar(id: number) {
     await fetch(`/api/horarios/${id}`, { method: "DELETE" });
     setConfirmDelete(null);
     fetchHorarios();
+    fetchTodosHorarios();
   }
 
   async function crearPlantilla() {
@@ -321,7 +335,16 @@ export default function TurnosPage() {
     setAsignOk(`Turno asignado a ${empleadoIds.length} empleado(s) en ${asignDias.length} día(s).`);
     setTimeout(() => setAsignOk(null), 4000);
     if (empleadoId !== null && empleadoIds.includes(empleadoId)) fetchHorarios();
+    fetchTodosHorarios();
   }
+
+  function irACargarTurno(id: number) {
+    setEmpleadoId(id);
+    verTurnosRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  const idsConTurno = new Set(todosHorarios.map((h) => h.empleado_id));
+  const empleadosSinTurno = empleados.filter((e) => !idsConTurno.has(e.id));
 
   const filasFiltradas = (filas ?? []).filter((f) => estadoFiltro === "Todos" || f.estado === estadoFiltro);
   const hayFiltrosCumplimiento = sucursalFiltro !== "Todas" || nombresFiltro.length > 0 || estadoFiltro !== "Todos";
@@ -351,10 +374,41 @@ export default function TurnosPage() {
 
         {tab === "horarios" && (
           <>
+            {/* Personal sin carga de turno */}
+            {empleadosSinTurno.length > 0 && (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                <p className="text-sm font-semibold text-amber-800 mb-2">
+                  ⚠ {empleadosSinTurno.length} empleado{empleadosSinTurno.length > 1 ? "s" : ""} activo{empleadosSinTurno.length > 1 ? "s" : ""} sin ningún turno cargado
+                </p>
+                <p className="text-xs text-amber-700 mb-3">
+                  No tienen horario definido para ningún día — no se les puede distinguir "franco" de "falta sin cargar". Tocá un nombre para cargarle turno.
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {empleadosSinTurno.map((e) => (
+                    <button
+                      key={e.id}
+                      onClick={() => irACargarTurno(e.id)}
+                      className="text-xs font-medium px-3 py-1 rounded-full bg-white border border-amber-300 text-amber-800 hover:bg-amber-100 transition-colors"
+                    >
+                      {e.nombre}
+                      {e.tipo_pago && <span className="text-amber-500 ml-1">· {e.tipo_pago === "mensual" ? "mensual" : e.tipo_pago === "hora" ? "por hora" : "por día"}</span>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Plantillas de turno */}
             <div className="bg-white rounded-xl border border-[#EDE0CC] p-4">
               <div className="flex items-center justify-between mb-3">
-                <h2 className="text-sm font-semibold text-[#2C1810]">Plantillas de turno</h2>
+                <button
+                  onClick={() => setMostrarListaPlantillas((v) => !v)}
+                  className="flex items-center gap-1.5 text-sm font-semibold text-[#2C1810] hover:text-[#3D2418]"
+                >
+                  <span className={`text-xs text-[#B89070] transition-transform ${mostrarListaPlantillas ? "rotate-90" : ""}`}>▶</span>
+                  Plantillas de turno
+                  <span className="text-xs font-normal text-[#B89070]">({templates.length})</span>
+                </button>
                 <button
                   onClick={() => setMostrarNuevaPlantilla((v) => !v)}
                   className="text-xs text-[#D4A843] hover:text-[#2C1810] underline font-medium"
@@ -457,7 +511,7 @@ export default function TurnosPage() {
                 </div>
               )}
 
-              {templates.length === 0 ? (
+              {mostrarListaPlantillas && (templates.length === 0 ? (
                 <p className="text-xs text-[#B89070] italic">Todavía no hay plantillas creadas.</p>
               ) : (
                 <div className="flex flex-wrap gap-2">
@@ -489,7 +543,7 @@ export default function TurnosPage() {
                     </div>
                   ))}
                 </div>
-              )}
+              ))}
             </div>
 
             {/* Asignar turno (a uno o varios empleados) */}
@@ -581,7 +635,7 @@ export default function TurnosPage() {
             </div>
 
             {/* Turnos de un empleado (ver / editar / borrar puntual) */}
-            <div className="bg-white rounded-xl border border-[#EDE0CC] p-4 flex flex-wrap gap-3 items-end">
+            <div ref={verTurnosRef} className="bg-white rounded-xl border border-[#EDE0CC] p-4 flex flex-wrap gap-3 items-end">
               <div className="flex flex-col gap-1">
                 <label className="text-xs text-[#8B6347] font-medium">Ver turnos de</label>
                 <select
@@ -601,8 +655,6 @@ export default function TurnosPage() {
                 <div className="flex justify-center py-16">
                   <div className="w-8 h-8 border-2 border-[#EDE0CC] border-t-[#D4A843] rounded-full animate-spin" />
                 </div>
-              ) : horarios.length === 0 ? (
-                <div className="text-center py-16 text-[#8B6347] text-sm">Este empleado no tiene turnos definidos.</div>
               ) : (
                 <table className="w-full text-sm responsive-table">
                   <thead>
@@ -615,7 +667,23 @@ export default function TurnosPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {horarios.map((h, i) => {
+                    {ORDEN_DIAS.flatMap((dia): { key: string; dia: number; h: HorarioEmpleado | null }[] => {
+                      const delDia = horarios.filter((h) => h.dia_semana === dia);
+                      return delDia.length > 0
+                        ? delDia.map((h) => ({ key: `h-${h.id}`, dia, h }))
+                        : [{ key: `franco-${dia}`, dia, h: null }];
+                    }).map((fila, i) => {
+                      if (fila.h === null) {
+                        return (
+                          <tr key={fila.key} className={`border-b border-[#EDE0CC] ${i % 2 === 0 ? "" : "bg-[#FDFAF6]"}`}>
+                            <td className="px-4 py-2.5 font-medium text-[#2C1810]" data-label="Día">{DIAS[fila.dia]}</td>
+                            <td className="px-4 py-2.5 text-[#B89070] italic" colSpan={4} data-label="Turno">
+                              Franco — sin turno cargado
+                            </td>
+                          </tr>
+                        );
+                      }
+                      const h = fila.h;
                       const isEditing = editandoId === h.id;
                       return (
                         <tr key={h.id} className={`border-b border-[#EDE0CC] hover:bg-[#FAF7F2] transition-colors ${i % 2 === 0 ? "" : "bg-[#FDFAF6]"}`}>

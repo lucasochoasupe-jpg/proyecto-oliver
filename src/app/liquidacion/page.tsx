@@ -25,6 +25,7 @@ interface LiquidacionEmpleado {
   dias_trabajados: number | null;
   horas_extra: number | null;
   total_por_horas: number | null;
+  adelantos: number;
   total: number;
   advertencias: string[];
 }
@@ -206,7 +207,7 @@ export default function LiquidacionPage() {
               </thead>
               <tbody>
                 {filas.map((f, i) => {
-                  const descuentos = f.descuento_tardanza + f.descuento_ausencia;
+                  const descuentos = f.descuento_tardanza + f.descuento_ausencia + f.adelantos;
                   return (
                     <Fragment key={f.empleado_id}>
                       <tr
@@ -265,6 +266,9 @@ export default function LiquidacionPage() {
                               {f.advertencias.map((a, j) => (
                                 <p key={j} className="text-amber-700">⚠ {a}</p>
                               ))}
+                              {f.adelantos > 0 && (
+                                <p className="text-red-600">Adelantos en el período: - {formatMoneda(f.adelantos)}</p>
+                              )}
                               {f.tipo_pago === "hora" && (
                                 <p>Horas trabajadas en el período: {f.horas_trabajadas !== null ? formatHoras(f.horas_trabajadas) : "—"}</p>
                               )}

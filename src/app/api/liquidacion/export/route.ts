@@ -30,6 +30,7 @@ export async function GET(req: NextRequest) {
     { header: "Días trabajados (jornal)", key: "dias_trabajados", width: 20 },
     { header: "Horas extra", key: "horas_extra", width: 14 },
     { header: "Según horas trabajadas", key: "total_por_horas", width: 20 },
+    { header: "Adelantos", key: "adelantos", width: 16 },
     { header: "Total", key: "total", width: 16 },
     { header: "Alertas", key: "advertencias", width: 30 },
   ];
@@ -65,6 +66,7 @@ export async function GET(req: NextRequest) {
       dias_trabajados: f.dias_trabajados ?? "",
       horas_extra: f.horas_extra !== null ? Number(f.horas_extra.toFixed(2)) : "",
       total_por_horas: f.total_por_horas !== null ? Number(f.total_por_horas.toFixed(2)) : "",
+      adelantos: f.adelantos > 0 ? Number(f.adelantos.toFixed(2)) : "",
       total: Number(f.total.toFixed(2)),
       advertencias: f.advertencias.join(" · "),
     });

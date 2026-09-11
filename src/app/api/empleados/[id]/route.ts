@@ -14,6 +14,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     valor_hora?: number | null;
     valor_dia?: number | null;
     fecha_ingreso?: string | null;
+    sueldo_estimado?: number | null;
   };
   updateEmpleado(Number(id), body);
   return NextResponse.json({ ok: true });

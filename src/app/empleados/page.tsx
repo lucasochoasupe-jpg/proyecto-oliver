@@ -14,6 +14,7 @@ interface Empleado {
   valor_hora: number | null;
   valor_dia: number | null;
   fecha_ingreso: string | null;
+  sueldo_estimado: number | null;
 }
 
 interface SaldoVacaciones {
@@ -50,6 +51,7 @@ export default function EmpleadosPage() {
         valor_hora: string;
         valor_dia: string;
         fecha_ingreso: string;
+        sueldo_estimado: string;
       }
     >
   >({});
@@ -88,6 +90,7 @@ export default function EmpleadosPage() {
         valor_hora: e.valor_hora !== null ? String(e.valor_hora) : "",
         valor_dia: e.valor_dia !== null ? String(e.valor_dia) : "",
         fecha_ingreso: e.fecha_ingreso ?? "",
+        sueldo_estimado: e.sueldo_estimado !== null ? String(e.sueldo_estimado) : "",
       },
     }));
   }
@@ -111,6 +114,8 @@ export default function EmpleadosPage() {
         valor_hora: e.tipo_pago && e.valor_hora.trim() ? Number(e.valor_hora) : null,
         valor_dia: e.tipo_pago === "dia" && e.valor_dia.trim() ? Number(e.valor_dia) : null,
         fecha_ingreso: e.fecha_ingreso.trim() || null,
+        sueldo_estimado:
+          (e.tipo_pago === "hora" || e.tipo_pago === "dia") && e.sueldo_estimado.trim() ? Number(e.sueldo_estimado) : null,
       }),
     });
     await fetchData();
@@ -394,15 +399,26 @@ export default function EmpleadosPage() {
                               </>
                             )}
                             {ed.tipo_pago === "hora" && (
-                              <input
-                                type="number"
-                                placeholder="Valor hora"
-                                value={ed.valor_hora}
-                                onChange={(e) =>
-                                  setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], valor_hora: e.target.value } }))
-                                }
-                                className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none w-24"
-                              />
+                              <>
+                                <input
+                                  type="number"
+                                  placeholder="Valor hora"
+                                  value={ed.valor_hora}
+                                  onChange={(e) =>
+                                    setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], valor_hora: e.target.value } }))
+                                  }
+                                  className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none w-24"
+                                />
+                                <input
+                                  type="number"
+                                  placeholder="Sueldo estimado (tope adelantos)"
+                                  value={ed.sueldo_estimado}
+                                  onChange={(e) =>
+                                    setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], sueldo_estimado: e.target.value } }))
+                                  }
+                                  className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none w-40"
+                                />
+                              </>
                             )}
                             {ed.tipo_pago === "dia" && (
                               <>
@@ -424,6 +440,15 @@ export default function EmpleadosPage() {
                                   }
                                   className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none w-28"
                                 />
+                                <input
+                                  type="number"
+                                  placeholder="Sueldo estimado (tope adelantos)"
+                                  value={ed.sueldo_estimado}
+                                  onChange={(e) =>
+                                    setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], sueldo_estimado: e.target.value } }))
+                                  }
+                                  className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none w-40"
+                                />
                               </>
                             )}
                           </div>
@@ -435,11 +460,13 @@ export default function EmpleadosPage() {
                         ) : emp.tipo_pago === "hora" ? (
                           <span className="text-xs text-[#2C1810]">
                             Por hora{emp.valor_hora ? ` · ${formatMoneda(emp.valor_hora)}` : ""}
+                            {emp.sueldo_estimado ? ` (est. ${formatMoneda(emp.sueldo_estimado)}/mes)` : ""}
                           </span>
                         ) : emp.tipo_pago === "dia" ? (
                           <span className="text-xs text-[#2C1810]">
                             Por día{emp.valor_dia ? ` · ${formatMoneda(emp.valor_dia)}` : ""}
                             {emp.valor_hora ? ` (extra ${formatMoneda(emp.valor_hora)}/h)` : ""}
+                            {emp.sueldo_estimado ? ` (est. ${formatMoneda(emp.sueldo_estimado)}/mes)` : ""}
                           </span>
                         ) : (
                           <span className="text-xs text-[#B89070] italic">Sin definir</span>

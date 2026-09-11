@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import ExcelJS from "exceljs";
-import db from "@/lib/db";
+import db, { listAusenciasManuales } from "@/lib/db";
+
+function formatFechaCorta(iso: string): string {
+  return new Date(`${iso}T00:00:00Z`).toLocaleDateString("es-AR", { timeZone: "UTC", day: "2-digit", month: "2-digit", year: "numeric" });
+}
 
 export const dynamic = "force-dynamic";
 
@@ -55,25 +59,56 @@ export async function GET(req: NextRequest) {
     )
     .all() as { id: number; content: string; created_at: number; phone: string }[];
 
-  const ausencias = rows
-    .map((r) => {
+  type FilaAusencia = {
+    id: number;
+    phone: string;
+    fecha: number;
+    nombre: string;
+    sucursal: string;
+    motivo: string;
+    detalle: string;
+    contacto: string;
+    certificadoPendiente: boolean;
+  };
+
+  const manuales: FilaAusencia[] = listAusenciasManuales().map((a) => {
+    const rango =
+      a.fecha_inicio === a.fecha_fin
+        ? ` el ${formatFechaCorta(a.fecha_inicio)}`
+        : ` del ${formatFechaCorta(a.fecha_inicio)} al ${formatFechaCorta(a.fecha_fin)}`;
+    return {
+      id: -a.id,
+      phone: a.phone ?? "",
+      fecha: a.created_at,
+      nombre: a.empleado_nombre,
+      sucursal: a.sucursal ?? "—",
+      motivo: `${a.categoria}${rango}`,
+      detalle: a.nota || "Cargado manualmente por administración",
+      contacto: a.phone || "—",
+      certificadoPendiente: a.categoria === "Enfermedad" && !!a.certificado_pendiente,
+    };
+  });
+
+  const desdeMensajes: FilaAusencia[] = rows
+    .map((r): FilaAusencia | null => {
       const p = parseAdminBlock(r.content);
       if (!p) return null;
       return { id: r.id, phone: r.phone, fecha: r.created_at, ...p };
     })
-    .filter(Boolean)
-    .filter((a) => {
-      if (!a) return false;
-      if (sucursal !== "Todas" && a.sucursal !== sucursal) return false;
-      if (motivo !== "Todos" && clasificarMotivo(a.motivo) !== motivo) return false;
-      if (soloCert && !a.certificadoPendiente) return false;
-      if (fecha) {
-        const d = new Date(a.fecha * 1000);
-        const isoDay = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-        if (isoDay !== fecha) return false;
-      }
-      return true;
-    }) as NonNullable<ReturnType<typeof parseAdminBlock> & { id: number; phone: string; fecha: number }>[];
+    .filter((a): a is FilaAusencia => a !== null);
+
+  const ausencias = desdeMensajes.concat(manuales).filter((a) => {
+    if (sucursal !== "Todas" && a.sucursal !== sucursal) return false;
+    if (motivo !== "Todos" && clasificarMotivo(a.motivo) !== motivo) return false;
+    if (soloCert && !a.certificadoPendiente) return false;
+    if (fecha) {
+      const d = new Date(a.fecha * 1000);
+      const isoDay = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      if (isoDay !== fecha) return false;
+    }
+    return true;
+  });
+  ausencias.sort((a, b) => b.fecha - a.fecha);
 
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Sanca RRHH";
