@@ -10,6 +10,7 @@ const NAV_LINKS = [
   { href: "/turnos", label: "Turnos", icon: "🕒" },
   { href: "/sucursales", label: "Sucursales y QR", icon: "🏬" },
   { href: "/rrhh", label: "Panel RRHH", icon: "🗂" },
+  { href: "/puestos", label: "Puestos y Tareas", icon: "🧩" },
   { href: "/liquidacion", label: "Liquidación", icon: "💵" },
   { href: "/adelantos", label: "Adelantos", icon: "💸" },
   { href: "/legajos", label: "Legajos", icon: "📁" },

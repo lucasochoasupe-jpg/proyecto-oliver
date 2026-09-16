@@ -385,7 +385,6 @@ export default function AsistenciaPage() {
   function exportarExcel() {
     const params = new URLSearchParams();
     if (sucursalFiltro !== "Todas") params.set("sucursal", sucursalFiltro);
-    if (tipoFiltro !== "Todos") params.set("tipo", tipoFiltro.toLowerCase());
     if (desdeFiltro) params.set("desde", desdeFiltro);
     if (hastaFiltro) params.set("hasta", hastaFiltro);
     if (nombresFiltro.length > 0) params.set("nombres", nombresFiltro.join(","));

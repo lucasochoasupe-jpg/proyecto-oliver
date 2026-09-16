@@ -26,6 +26,7 @@ try { db.exec("ALTER TABLE empleados ADD COLUMN fecha_ingreso TEXT"); } catch {}
 try { db.exec("ALTER TABLE empleados ADD COLUMN sueldo_estimado REAL"); } catch {}
 try { db.exec("ALTER TABLE ausencias_reportadas ADD COLUMN sucursal TEXT"); } catch {}
 try { db.exec("ALTER TABLE ausencias_reportadas ADD COLUMN nota TEXT"); } catch {}
+try { db.exec("ALTER TABLE empleados ADD COLUMN puesto_id INTEGER REFERENCES puestos(id)"); } catch {}
 
 // La nómina inicial solo debe cargarse la primera vez que se crea la base
 // (instalación nueva) — si corriera en cada arranque, un empleado borrado desde
@@ -226,6 +227,18 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_adelantos_empleado_fecha
     ON adelantos(empleado_id, fecha);
+
+  CREATE TABLE IF NOT EXISTS puestos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre TEXT NOT NULL UNIQUE,
+    departamento TEXT,
+    reporta_a TEXT,
+    objetivo TEXT,
+    funciones TEXT,
+    requisitos TEXT,
+    competencias TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
 
   CREATE TABLE IF NOT EXISTS lid_phone (
     lid TEXT PRIMARY KEY,
@@ -740,6 +753,12 @@ export function eliminarAusenciaReportadaManual(id: number): boolean {
   return info.changes > 0;
 }
 
+export function eliminarAusenciasReportadasManuales(ids: number[]): void {
+  if (ids.length === 0) return;
+  const placeholders = ids.map(() => "?").join(", ");
+  db.prepare(`DELETE FROM ausencias_reportadas WHERE id IN (${placeholders}) AND admin_message_id IS NULL`).run(...ids);
+}
+
 // Avisos cuyo rango [fecha_inicio, fecha_fin] se solapa con [desde, hasta].
 function getAusenciasReportadas(desde: string, hasta: string): AusenciaReportada[] {
   return db
@@ -1047,6 +1066,7 @@ export interface Empleado {
   valor_dia: number | null;
   fecha_ingreso: string | null; // ISO (YYYY-MM-DD) — usada para calcular el saldo de vacaciones
   sueldo_estimado: number | null; // solo tipo 'hora'/'dia' — referencia para el tope de adelantos (no tienen sueldo_mensual)
+  puesto_id: number | null;
 }
 
 function sameWords(a: string[], b: string[]): boolean {
@@ -1172,6 +1192,23 @@ export function updateEmpleado(
 
 export function deleteEmpleado(id: number): void {
   db.prepare("DELETE FROM empleados WHERE id = ?").run(id);
+}
+
+export function deleteEmpleadosMany(ids: number[]): void {
+  if (ids.length === 0) return;
+  const placeholders = ids.map(() => "?").join(", ");
+  db.prepare(`DELETE FROM empleados WHERE id IN (${placeholders})`).run(...ids);
+}
+
+export function listEmpleadosConPuesto(): (Empleado & { puesto_nombre: string | null })[] {
+  return db
+    .prepare(
+      `SELECT e.*, p.nombre AS puesto_nombre
+       FROM empleados e
+       LEFT JOIN puestos p ON p.id = e.puesto_id
+       ORDER BY e.nombre ASC`
+    )
+    .all() as unknown as (Empleado & { puesto_nombre: string | null })[];
 }
 
 export function getEmpleadoById(id: number): Empleado | null {
@@ -2690,6 +2727,115 @@ export function calcularSaldoVacaciones(anio?: number): SaldoVacacionesEmpleado[
         advertencia: null,
       };
     });
+}
+
+// ── Puestos y tareas ─────────────────────────────────────────────────────
+// Descripción de cada puesto de trabajo (objetivo, funciones, requisitos,
+// competencias) y qué empleados lo ocupan hoy. La relación es 1 puesto → N
+// empleados (empleados.puesto_id); un empleado tiene a lo sumo un puesto.
+
+export interface Puesto {
+  id: number;
+  nombre: string;
+  departamento: string | null;
+  reporta_a: string | null;
+  objetivo: string | null;
+  funciones: string | null;
+  requisitos: string | null;
+  competencias: string | null;
+  created_at: number;
+}
+
+export function listPuestos(): (Puesto & { cantidad_empleados: number })[] {
+  return db
+    .prepare(
+      `SELECT p.*, (SELECT COUNT(*) FROM empleados e WHERE e.puesto_id = p.id AND e.activo = 1) AS cantidad_empleados
+       FROM puestos p
+       ORDER BY p.nombre ASC`
+    )
+    .all() as unknown as (Puesto & { cantidad_empleados: number })[];
+}
+
+export function getPuestoById(id: number): Puesto | null {
+  return (db.prepare("SELECT * FROM puestos WHERE id = ?").get(id) as unknown as Puesto | undefined) ?? null;
+}
+
+export function crearPuesto(data: {
+  nombre: string;
+  departamento?: string | null;
+  reporta_a?: string | null;
+  objetivo?: string | null;
+  funciones?: string | null;
+  requisitos?: string | null;
+  competencias?: string | null;
+}): number {
+  const info = db
+    .prepare(
+      `INSERT INTO puestos (nombre, departamento, reporta_a, objetivo, funciones, requisitos, competencias)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      data.nombre,
+      data.departamento ?? null,
+      data.reporta_a ?? null,
+      data.objetivo ?? null,
+      data.funciones ?? null,
+      data.requisitos ?? null,
+      data.competencias ?? null
+    );
+  return Number(info.lastInsertRowid);
+}
+
+export function actualizarPuesto(
+  id: number,
+  patch: {
+    nombre?: string;
+    departamento?: string | null;
+    reporta_a?: string | null;
+    objetivo?: string | null;
+    funciones?: string | null;
+    requisitos?: string | null;
+    competencias?: string | null;
+  }
+): void {
+  const current = getPuestoById(id);
+  if (!current) return;
+  db.prepare(
+    `UPDATE puestos SET nombre = ?, departamento = ?, reporta_a = ?, objetivo = ?, funciones = ?, requisitos = ?, competencias = ?
+     WHERE id = ?`
+  ).run(
+    patch.nombre ?? current.nombre,
+    patch.departamento !== undefined ? patch.departamento : current.departamento,
+    patch.reporta_a !== undefined ? patch.reporta_a : current.reporta_a,
+    patch.objetivo !== undefined ? patch.objetivo : current.objetivo,
+    patch.funciones !== undefined ? patch.funciones : current.funciones,
+    patch.requisitos !== undefined ? patch.requisitos : current.requisitos,
+    patch.competencias !== undefined ? patch.competencias : current.competencias,
+    id
+  );
+}
+
+export function eliminarPuesto(id: number): void {
+  withTransaction(() => {
+    db.prepare("UPDATE empleados SET puesto_id = NULL WHERE puesto_id = ?").run(id);
+    db.prepare("DELETE FROM puestos WHERE id = ?").run(id);
+  });
+}
+
+export function listEmpleadosPorPuesto(puestoId: number): Empleado[] {
+  return db.prepare("SELECT * FROM empleados WHERE puesto_id = ? ORDER BY nombre ASC").all(puestoId) as unknown as Empleado[];
+}
+
+// Reemplaza la lista completa de empleados asignados a un puesto: agrega los
+// nuevos y desasigna (puesto_id = NULL) a los que ya no vienen en la lista.
+export function asignarEmpleadosAPuesto(puestoId: number, empleadoIds: number[]): void {
+  withTransaction(() => {
+    db.prepare("UPDATE empleados SET puesto_id = NULL WHERE puesto_id = ?").run(puestoId);
+    if (empleadoIds.length > 0) {
+      const placeholders = empleadoIds.map(() => "?").join(", ");
+      db.prepare(`UPDATE empleados SET puesto_id = ? WHERE id IN (${placeholders})`).run(puestoId, ...empleadoIds);
+    }
+  });
 }
 
 export default db;

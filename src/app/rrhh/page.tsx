@@ -85,6 +85,9 @@ export default function RRHHPage() {
   const [fechaFiltro, setFechaFiltro] = useState("");
   const [detalle, setDetalle] = useState<AusenciaRecord | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [confirmBulk, setConfirmBulk] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   // Carga manual
   const [mostrarForm, setMostrarForm] = useState(false);
@@ -126,6 +129,12 @@ export default function RRHHPage() {
       .then((r) => r.json())
       .then((data: { id: number; nombre: string; activo: number }[]) => setEmpleados(data.filter((e) => e.activo)));
   }, []);
+
+  useEffect(() => {
+    if (!data) return;
+    const idsPresentes = new Set(data.ausencias.map((a) => a.id));
+    setSelected((prev) => new Set([...prev].filter((id) => idsPresentes.has(id))));
+  }, [data]);
 
   async function cargarManual(e: React.FormEvent) {
     e.preventDefault();
@@ -174,6 +183,33 @@ export default function RRHHPage() {
   async function eliminarRegistro(id: number) {
     await fetch(`/api/rrhh/${id}`, { method: "DELETE" });
     setConfirmDelete(null);
+    fetchData();
+  }
+
+  function toggleSelect(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    const allSelected = ausenciasFiltradas.length > 0 && selected.size === ausenciasFiltradas.length;
+    setSelected(allSelected ? new Set() : new Set(ausenciasFiltradas.map((a) => a.id)));
+  }
+
+  async function eliminarSeleccionados() {
+    setDeleting(true);
+    await fetch("/api/rrhh", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: Array.from(selected) }),
+    });
+    setConfirmBulk(false);
+    setSelected(new Set());
+    setDeleting(false);
     fetchData();
   }
 
@@ -419,6 +455,37 @@ export default function RRHHPage() {
           )}
         </div>
 
+        {selected.size > 0 && (
+          <div className="flex items-center justify-between rounded-xl border border-[#D4A843] bg-[#FDF6E3] px-4 py-2.5">
+            <span className="text-sm font-medium text-[#2C1810]">{selected.size} seleccionados</span>
+            {confirmBulk ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-[#8B6347]">¿Eliminar {selected.size} registros?</span>
+                <button
+                  onClick={eliminarSeleccionados}
+                  disabled={deleting}
+                  className="rounded bg-red-500 px-2 py-1 text-xs font-medium text-white hover:bg-red-600 disabled:opacity-50"
+                >
+                  {deleting ? "..." : "Confirmar"}
+                </button>
+                <button
+                  onClick={() => setConfirmBulk(false)}
+                  className="text-xs text-[#8B6347] underline hover:text-[#2C1810]"
+                >
+                  Cancelar
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmBulk(true)}
+                className="rounded-full bg-red-500 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-red-600 active:scale-95"
+              >
+                Eliminar seleccionados
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Tabla */}
         <div className="bg-white rounded-xl border border-[#EDE0CC] overflow-hidden">
           {loading && (
@@ -443,6 +510,14 @@ export default function RRHHPage() {
             <table className="w-full text-sm responsive-table">
               <thead>
                 <tr className="border-b border-[#EDE0CC] bg-[#FAF7F2]">
+                  <th className="w-10 px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={ausenciasFiltradas.length > 0 && selected.size === ausenciasFiltradas.length}
+                      onChange={toggleSelectAll}
+                      className="h-4 w-4 rounded border-[#D4A843] text-[#2C1810] focus:ring-[#D4A843]"
+                    />
+                  </th>
                   <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Empleado</th>
                   <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Sucursal</th>
                   <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Tipo</th>
@@ -452,11 +527,21 @@ export default function RRHHPage() {
                 </tr>
               </thead>
               <tbody>
-                {ausenciasFiltradas.map((a, i) => (
+                {ausenciasFiltradas.map((a, i) => {
+                  const isSelected = selected.has(a.id);
+                  return (
                   <tr
                     key={a.id}
-                    className={`border-b border-[#EDE0CC] hover:bg-[#FAF7F2] transition-colors ${i % 2 === 0 ? "" : "bg-[#FDFAF6]"}`}
+                    className={`border-b border-[#EDE0CC] hover:bg-[#FAF7F2] transition-colors ${i % 2 === 0 ? "" : "bg-[#FDFAF6]"} ${isSelected ? "bg-[#FDF6E3]" : ""}`}
                   >
+                    <td className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleSelect(a.id)}
+                        className="h-4 w-4 rounded border-[#D4A843] text-[#2C1810] focus:ring-[#D4A843]"
+                      />
+                    </td>
                     <td className="px-4 py-3 font-medium text-[#2C1810]" data-label="Empleado">
                       {a.nombre}
                       {a.origen === "manual" && (
@@ -518,7 +603,8 @@ export default function RRHHPage() {
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           )}

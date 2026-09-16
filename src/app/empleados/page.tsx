@@ -67,6 +67,9 @@ export default function EmpleadosPage() {
 
   // Confirmar eliminación
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [confirmBulk, setConfirmBulk] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchData = useCallback(async () => {
     const [res, resSaldos] = await Promise.all([fetch("/api/empleados"), fetch("/api/vacaciones")]);
@@ -78,6 +81,11 @@ export default function EmpleadosPage() {
   }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  useEffect(() => {
+    const idsPresentes = new Set(empleados.map((e) => e.id));
+    setSelected((prev) => new Set([...prev].filter((id) => idsPresentes.has(id))));
+  }, [empleados]);
 
   function startEdit(e: Empleado) {
     setEditando((prev) => ({
@@ -169,6 +177,33 @@ export default function EmpleadosPage() {
     }
     return true;
   });
+
+  function toggleSelect(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    const allSelected = filtrados.length > 0 && selected.size === filtrados.length;
+    setSelected(allSelected ? new Set() : new Set(filtrados.map((e) => e.id)));
+  }
+
+  async function eliminarSeleccionados() {
+    setDeleting(true);
+    await fetch("/api/empleados", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: Array.from(selected) }),
+    });
+    setConfirmBulk(false);
+    setSelected(new Set());
+    setDeleting(false);
+    fetchData();
+  }
 
   async function desvincular(id: number) {
     await fetch(`/api/empleados/${id}`, {
@@ -276,6 +311,37 @@ export default function EmpleadosPage() {
           <span className="text-xs text-[#B89070] ml-auto">{filtrados.length} empleados</span>
         </div>
 
+        {selected.size > 0 && (
+          <div className="flex items-center justify-between rounded-xl border border-[#D4A843] bg-[#FDF6E3] px-4 py-2.5">
+            <span className="text-sm font-medium text-[#2C1810]">{selected.size} seleccionados</span>
+            {confirmBulk ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-[#8B6347]">¿Eliminar {selected.size} empleados?</span>
+                <button
+                  onClick={eliminarSeleccionados}
+                  disabled={deleting}
+                  className="rounded bg-red-500 px-2 py-1 text-xs font-medium text-white hover:bg-red-600 disabled:opacity-50"
+                >
+                  {deleting ? "..." : "Confirmar"}
+                </button>
+                <button
+                  onClick={() => setConfirmBulk(false)}
+                  className="text-xs text-[#8B6347] underline hover:text-[#2C1810]"
+                >
+                  Cancelar
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmBulk(true)}
+                className="rounded-full bg-red-500 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-red-600 active:scale-95"
+              >
+                Eliminar seleccionados
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Tabla */}
         <div className="bg-white rounded-xl border border-[#EDE0CC] overflow-hidden">
           {loading ? (
@@ -289,6 +355,14 @@ export default function EmpleadosPage() {
             <table className="w-full text-sm min-w-[1150px] responsive-table">
               <thead>
                 <tr className="border-b border-[#EDE0CC] bg-[#FAF7F2]">
+                  <th className="w-10 px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={filtrados.length > 0 && selected.size === filtrados.length}
+                      onChange={toggleSelectAll}
+                      className="h-4 w-4 rounded border-[#D4A843] text-[#2C1810] focus:ring-[#D4A843]"
+                    />
+                  </th>
                   <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Nombre y Apellido</th>
                   <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Celular</th>
                   <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Ingreso</th>
@@ -303,11 +377,20 @@ export default function EmpleadosPage() {
                 {filtrados.map((emp, i) => {
                   const isEditing = !!editando[emp.id];
                   const ed = editando[emp.id];
+                  const isSelected = selected.has(emp.id);
                   return (
                     <tr
                       key={emp.id}
-                      className={`border-b border-[#EDE0CC] hover:bg-[#FAF7F2] transition-colors ${i % 2 === 0 ? "" : "bg-[#FDFAF6]"} ${!emp.activo ? "opacity-50" : ""}`}
+                      className={`border-b border-[#EDE0CC] hover:bg-[#FAF7F2] transition-colors ${i % 2 === 0 ? "" : "bg-[#FDFAF6]"} ${!emp.activo ? "opacity-50" : ""} ${isSelected ? "bg-[#FDF6E3]" : ""}`}
                     >
+                      <td className="px-4 py-2.5">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleSelect(emp.id)}
+                          className="h-4 w-4 rounded border-[#D4A843] text-[#2C1810] focus:ring-[#D4A843]"
+                        />
+                      </td>
                       <td className="px-4 py-2.5" data-label="Nombre y Apellido">
                         {isEditing ? (
                           <input

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import db, { calcularSaldoVacaciones, crearAusenciaReportada, getEmpleadoById, listAusenciasManuales } from "@/lib/db";
+import db, { calcularSaldoVacaciones, crearAusenciaReportada, getEmpleadoById, listAusenciasManuales, eliminarAusenciasReportadasManuales } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -212,4 +212,29 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({ id: -id, advertencia }, { status: 201 });
+}
+
+// Borra varios registros a la vez. Los ids positivos son mensajes del bot
+// (messages.id); los negativos son cargas manuales (-ausencias_reportadas.id),
+// mismo criterio que DELETE /api/rrhh/[id].
+export async function DELETE(req: NextRequest) {
+  const body = await req.json().catch(() => null);
+  const ids: number[] = Array.isArray(body?.ids)
+    ? body.ids.map(Number).filter((n: number) => Number.isInteger(n) && n !== 0)
+    : [];
+
+  if (ids.length === 0) {
+    return NextResponse.json({ error: "No se recibieron IDs válidos." }, { status: 400 });
+  }
+
+  const messageIds = ids.filter((id) => id > 0);
+  const manualIds = ids.filter((id) => id < 0).map((id) => -id);
+
+  if (messageIds.length > 0) {
+    const placeholders = messageIds.map(() => "?").join(", ");
+    db.prepare(`DELETE FROM messages WHERE id IN (${placeholders}) AND role = 'assistant'`).run(...messageIds);
+  }
+  eliminarAusenciasReportadasManuales(manualIds);
+
+  return NextResponse.json({ ok: true, deleted: ids.length });
 }
