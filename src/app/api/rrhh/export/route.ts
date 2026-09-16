@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import db, { listAusenciasManuales } from "@/lib/db";
+import { COLOR, fill, zebraFill, configurarColumnas, estilarHeader, aplicarGrilla, estilarFilaTotal, agregarBranding } from "@/lib/excel-style";
 
 function formatFechaCorta(iso: string): string {
   return new Date(`${iso}T00:00:00Z`).toLocaleDateString("es-AR", { timeZone: "UTC", day: "2-digit", month: "2-digit", year: "numeric" });
@@ -117,7 +118,7 @@ export async function GET(req: NextRequest) {
   const ws = workbook.addWorksheet("Ausentismo");
 
   // Columnas con anchos fijos
-  ws.columns = [
+  const columnas = [
     { header: "Empleado",              key: "nombre",               width: 26 },
     { header: "Sucursal",              key: "sucursal",             width: 16 },
     { header: "Tipo",                  key: "tipo",                 width: 18 },
@@ -128,18 +129,8 @@ export async function GET(req: NextRequest) {
     { header: "Detalle",               key: "detalle",              width: 50 },
     { header: "Contacto",              key: "contacto",             width: 36 },
   ];
-
-  // Estilo del header
-  const headerRow = ws.getRow(1);
-  headerRow.eachCell((cell) => {
-    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF2C1810" } };
-    cell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
-    cell.alignment = { vertical: "middle", horizontal: "center" };
-    cell.border = {
-      bottom: { style: "medium", color: { argb: "FFD4A843" } },
-    };
-  });
-  headerRow.height = 22;
+  configurarColumnas(ws, columnas, 2);
+  agregarBranding(workbook, ws, "RRHH — Ausentismo", columnas.length);
 
   // Filas de datos
   ausencias.forEach((a, i) => {
@@ -158,9 +149,8 @@ export async function GET(req: NextRequest) {
       contacto: a.contacto,
     });
 
-    const bg = i % 2 === 0 ? "FFFAF7F2" : "FFFFFFFF";
     row.eachCell({ includeEmpty: true }, (cell) => {
-      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } };
+      cell.fill = zebraFill(i);
       cell.alignment = { vertical: "middle", wrapText: false };
       cell.font = { size: 10 };
     });
@@ -168,29 +158,21 @@ export async function GET(req: NextRequest) {
     // Resaltar cert pendiente
     const certCell = row.getCell("cert");
     if (a.certificadoPendiente) {
-      certCell.font = { bold: true, color: { argb: "FFB45309" }, size: 10 };
-      certCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEF3C7" } };
+      certCell.font = { bold: true, color: { argb: `FF${COLOR.pendienteTexto}` }, size: 10 };
+      certCell.fill = fill(COLOR.pendiente);
     }
 
     row.height = 18;
   });
 
-  // Bordes exteriores de la tabla
-  const lastRow = ws.lastRow?.number ?? 1;
-  for (let r = 1; r <= lastRow; r++) {
-    const row = ws.getRow(r);
-    row.getCell(1).border = { ...row.getCell(1).border, left: { style: "thin", color: { argb: "FFDDD0BC" } } };
-    row.getCell(9).border = { ...row.getCell(9).border, right: { style: "thin", color: { argb: "FFDDD0BC" } } };
-  }
+  estilarHeader(ws, 2);
+  aplicarGrilla(ws, 2);
 
   // Fila de resumen al final
   ws.addRow({});
   const totalRow = ws.addRow({ nombre: `Total: ${ausencias.length} registros`, cert: `Cert. pendientes: ${ausencias.filter((a) => a.certificadoPendiente).length}` });
-  totalRow.getCell(1).font = { bold: true, italic: true, color: { argb: "FF8B6347" }, size: 10 };
-  totalRow.getCell(7).font = { bold: true, italic: true, color: { argb: "FFB45309" }, size: 10 };
-
-  // Freeze header
-  ws.views = [{ state: "frozen", ySplit: 1 }];
+  estilarFilaTotal(totalRow);
+  totalRow.getCell("cert").font = { bold: true, italic: true, color: { argb: `FF${COLOR.pendienteTexto}` }, size: 10 };
 
   const buffer = await workbook.xlsx.writeBuffer();
   const today = new Date().toLocaleDateString("es-AR", { timeZone: "America/Argentina/Buenos_Aires", day: "2-digit", month: "2-digit", year: "numeric" }).replace(/\//g, "-");

@@ -2,20 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import { calcularHorasTrabajadas } from "@/lib/db";
 import { AR_TZ, hoyISO, inicioDeMesISO } from "@/lib/date-ar";
+import { COLOR, fill, zebraFill, configurarColumnas, estilarHeader, aplicarGrilla, agregarBranding } from "@/lib/excel-style";
 
 export const dynamic = "force-dynamic";
 
-const HEADER_COLOR = "2C1810";
-const EN_CURSO_COLOR = "FEF3C7";
-
-function estilarHeader(ws: ExcelJS.Worksheet) {
-  ws.getRow(1).eachCell((cell) => {
-    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${HEADER_COLOR}` } };
-    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
-    cell.alignment = { vertical: "middle", horizontal: "center" };
-  });
-  ws.getRow(1).height = 22;
-  ws.views = [{ state: "frozen", ySplit: 1 }];
+function formatFechaISO(iso: string): string {
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y}`;
 }
 
 export async function GET(req: NextRequest) {
@@ -56,30 +49,31 @@ export async function GET(req: NextRequest) {
 
   // ── Hoja Resumen ──
   const wsResumen = wb.addWorksheet("Resumen");
-  wsResumen.columns = [
+  const columnasResumen = [
     { header: "Empleado", key: "nombre", width: 28 },
     { header: "Total horas", key: "totalHoras", width: 14 },
     { header: "En curso", key: "enCurso", width: 12 },
   ];
-  for (const e of resumen) {
+  configurarColumnas(wsResumen, columnasResumen, 2);
+  agregarBranding(wb, wsResumen, `Horas trabajadas — Resumen (${formatFechaISO(desde)} a ${formatFechaISO(hasta)})`, columnasResumen.length);
+  resumen.forEach((e, i) => {
     const row = wsResumen.addRow({
       nombre: e.nombre,
       totalHoras: Number(e.totalHoras.toFixed(2)),
       enCurso: e.enCurso ? "Sí" : "",
     });
     row.getCell("totalHoras").numFmt = "0.00";
-    if (e.enCurso) {
-      row.eachCell((cell) => {
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${EN_CURSO_COLOR}` } };
-      });
-    }
-    row.eachCell((cell) => { cell.alignment = { vertical: "middle" }; });
-  }
-  estilarHeader(wsResumen);
+    row.eachCell((cell) => {
+      cell.alignment = { vertical: "middle" };
+      cell.fill = e.enCurso ? fill(COLOR.pendiente) : zebraFill(i);
+    });
+  });
+  estilarHeader(wsResumen, 2);
+  aplicarGrilla(wsResumen, 2);
 
   // ── Hoja Detalle (un turno por fila) ──
   const wsDetalle = wb.addWorksheet("Detalle");
-  wsDetalle.columns = [
+  const columnasDetalle = [
     { header: "Empleado", key: "nombre", width: 28 },
     { header: "Sucursal", key: "sucursal_nombre", width: 16 },
     { header: "Fecha", key: "fecha", width: 14 },
@@ -87,7 +81,9 @@ export async function GET(req: NextRequest) {
     { header: "Salida", key: "salida", width: 10 },
     { header: "Horas", key: "horas", width: 12 },
   ];
-  for (const t of turnos) {
+  configurarColumnas(wsDetalle, columnasDetalle, 2);
+  agregarBranding(wb, wsDetalle, `Horas trabajadas — Detalle (${formatFechaISO(desde)} a ${formatFechaISO(hasta)})`, columnasDetalle.length);
+  turnos.forEach((t, i) => {
     const d = new Date(t.entrada_at * 1000);
     const fecha = d.toLocaleDateString("es-AR", { timeZone: AR_TZ, day: "2-digit", month: "2-digit", year: "numeric" });
     const entrada = d.toLocaleTimeString("es-AR", { timeZone: AR_TZ, hour: "2-digit", minute: "2-digit", hour12: false });
@@ -103,14 +99,13 @@ export async function GET(req: NextRequest) {
       horas: t.horas !== null ? Number(t.horas.toFixed(2)) : "",
     });
     if (t.horas !== null) row.getCell("horas").numFmt = "0.00";
-    if (t.horas === null) {
-      row.eachCell((cell) => {
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${EN_CURSO_COLOR}` } };
-      });
-    }
-    row.eachCell((cell) => { cell.alignment = { vertical: "middle" }; });
-  }
-  estilarHeader(wsDetalle);
+    row.eachCell((cell) => {
+      cell.alignment = { vertical: "middle" };
+      cell.fill = t.horas === null ? fill(COLOR.pendiente) : zebraFill(i);
+    });
+  });
+  estilarHeader(wsDetalle, 2);
+  aplicarGrilla(wsDetalle, 2);
 
   const buffer = await wb.xlsx.writeBuffer();
   const rango = `${desde}_a_${hasta}`;

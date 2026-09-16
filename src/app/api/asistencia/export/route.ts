@@ -2,26 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import { calcularCumplimiento, calcularAusencias, listMarcacionesHuerfanas, type CumplimientoRow } from "@/lib/db";
 import { AR_TZ, hoyISO, inicioDeMesISO } from "@/lib/date-ar";
+import { COLOR, fill, zebraFill, configurarColumnas, estilarHeader, aplicarGrilla, agregarBranding } from "@/lib/excel-style";
 
 export const dynamic = "force-dynamic";
-
-const HEADER_COLOR = "2C1810";
-const A_HORARIO_COLOR = "D1FAE5";
-const TARDE_COLOR = "FECACA";
-const SIN_HORARIO_COLOR = "F3F4F6";
-const JUSTIFICADA_COLOR = "DBEAFE";
-const INJUSTIFICADA_COLOR = "FCA5A5";
-const SIN_PAR_COLOR = "FEF3C7";
-
-function estilarHeader(ws: ExcelJS.Worksheet) {
-  ws.getRow(1).eachCell((cell) => {
-    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${HEADER_COLOR}` } };
-    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
-    cell.alignment = { vertical: "middle", horizontal: "center" };
-  });
-  ws.getRow(1).height = 22;
-  ws.views = [{ state: "frozen", ySplit: 1 }];
-}
 
 function formatFechaISO(iso: string): string {
   const [y, m, d] = iso.split("-");
@@ -41,10 +24,10 @@ const ESTADO_LABEL: Record<CumplimientoRow["estado"], string> = {
 };
 
 function colorTurno(estado: CumplimientoRow["estado"], enCurso: boolean): string {
-  if (enCurso) return SIN_PAR_COLOR;
-  if (estado === "a_horario") return A_HORARIO_COLOR;
-  if (estado === "sin_horario") return SIN_HORARIO_COLOR;
-  return TARDE_COLOR;
+  if (enCurso) return COLOR.pendiente;
+  if (estado === "a_horario") return COLOR.aHorario;
+  if (estado === "sin_horario") return COLOR.sinHorario;
+  return COLOR.tarde;
 }
 
 export async function GET(req: NextRequest) {
@@ -146,7 +129,7 @@ export async function GET(req: NextRequest) {
       diffSalida: null,
       horas: a.horas,
       estado: a.justificada ? "Ausencia justificada" : "Ausencia injustificada",
-      color: a.justificada ? JUSTIFICADA_COLOR : INJUSTIFICADA_COLOR,
+      color: a.justificada ? COLOR.justificada : COLOR.injustificada,
     });
   }
   for (const h of huerfanas) {
@@ -164,7 +147,7 @@ export async function GET(req: NextRequest) {
       diffSalida: null,
       horas: null,
       estado: `Marcación de ${h.tipo} sin par`,
-      color: SIN_PAR_COLOR,
+      color: COLOR.pendiente,
     });
   }
   filas.sort((a, b) => a.fecha.localeCompare(b.fecha) || a.orden - b.orden);
@@ -173,7 +156,7 @@ export async function GET(req: NextRequest) {
   const wb = new ExcelJS.Workbook();
 
   const wsResumen = wb.addWorksheet("Resumen");
-  wsResumen.columns = [
+  const columnasResumen = [
     { header: "Empleado", key: "nombre", width: 28 },
     { header: "Horas trabajadas", key: "horas", width: 16 },
     { header: "Tardanzas", key: "tardanzas", width: 12 },
@@ -182,7 +165,9 @@ export async function GET(req: NextRequest) {
     { header: "Ausencias injustificadas", key: "ausenciasInjustificadas", width: 18 },
     { header: "Marcaciones sin par", key: "sinPar", width: 16 },
   ];
-  for (const e of resumen) {
+  configurarColumnas(wsResumen, columnasResumen, 2);
+  agregarBranding(wb, wsResumen, `Asistencia — Resumen (${formatFechaISO(desde)} a ${formatFechaISO(hasta)})`, columnasResumen.length);
+  resumen.forEach((e, i) => {
     const row = wsResumen.addRow({
       nombre: e.nombre,
       horas: Number(e.horas.toFixed(2)),
@@ -193,28 +178,31 @@ export async function GET(req: NextRequest) {
       sinPar: e.sinPar,
     });
     row.getCell("horas").numFmt = "0.00";
-    row.eachCell((cell) => { cell.alignment = { vertical: "middle" }; });
+    row.eachCell((cell) => { cell.alignment = { vertical: "middle" }; cell.fill = zebraFill(i); });
     if (e.ausenciasInjustificadas > 0) {
-      row.getCell("ausenciasInjustificadas").fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${INJUSTIFICADA_COLOR}` } };
+      row.getCell("ausenciasInjustificadas").fill = fill(COLOR.injustificada);
     }
-  }
-  estilarHeader(wsResumen);
+  });
+  estilarHeader(wsResumen, 2);
+  aplicarGrilla(wsResumen, 2);
 
   const wsDetalle = wb.addWorksheet("Detalle");
-  wsDetalle.columns = [
+  const columnasDetalle = [
     { header: "Empleado", key: "nombre", width: 28 },
     { header: "Sucursal", key: "sucursal", width: 16 },
     { header: "Fecha", key: "fecha", width: 12 },
     { header: "Tipo", key: "tipo", width: 10 },
     { header: "Entrada real", key: "entradaReal", width: 12 },
     { header: "Entrada esperada", key: "entradaEsperada", width: 14 },
-    { header: "Diferencia entrada (min)", key: "diffEntrada", width: 18 },
+    { header: "Diferencia entrada (min)", key: "diffEntrada", width: 20 },
     { header: "Salida real", key: "salidaReal", width: 12 },
     { header: "Salida esperada", key: "salidaEsperada", width: 14 },
-    { header: "Diferencia salida (min)", key: "diffSalida", width: 18 },
+    { header: "Diferencia salida (min)", key: "diffSalida", width: 20 },
     { header: "Horas", key: "horas", width: 10 },
     { header: "Estado", key: "estado", width: 26 },
   ];
+  configurarColumnas(wsDetalle, columnasDetalle, 2);
+  agregarBranding(wb, wsDetalle, `Asistencia — Detalle (${formatFechaISO(desde)} a ${formatFechaISO(hasta)})`, columnasDetalle.length);
   for (const f of filas) {
     const row = wsDetalle.addRow({
       nombre: f.nombre,
@@ -233,10 +221,11 @@ export async function GET(req: NextRequest) {
     if (f.horas !== null) row.getCell("horas").numFmt = "0.00";
     row.eachCell((cell) => {
       cell.alignment = { vertical: "middle" };
-      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${f.color}` } };
+      cell.fill = fill(f.color);
     });
   }
-  estilarHeader(wsDetalle);
+  estilarHeader(wsDetalle, 2);
+  aplicarGrilla(wsDetalle, 2);
 
   const buffer = await wb.xlsx.writeBuffer();
   const rango = `${desde}_a_${hasta}`;

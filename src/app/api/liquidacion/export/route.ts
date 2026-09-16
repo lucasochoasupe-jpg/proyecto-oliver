@@ -2,8 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import { calcularLiquidacion } from "@/lib/db";
 import { hoyISO, inicioDeMesISO } from "@/lib/date-ar";
+import { zebraFill, configurarColumnas, estilarHeader, aplicarGrilla, agregarBranding } from "@/lib/excel-style";
 
 export const dynamic = "force-dynamic";
+
+function formatFechaISO(iso: string): string {
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y}`;
+}
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -16,7 +22,7 @@ export async function GET(req: NextRequest) {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet("Liquidación");
 
-  ws.columns = [
+  const columnas = [
     { header: "Empleado", key: "nombre", width: 28 },
     { header: "Tipo de pago", key: "tipo_pago", width: 14 },
     { header: "Base", key: "base", width: 14 },
@@ -34,16 +40,10 @@ export async function GET(req: NextRequest) {
     { header: "Total", key: "total", width: 16 },
     { header: "Alertas", key: "advertencias", width: 30 },
   ];
+  configurarColumnas(ws, columnas, 2);
+  agregarBranding(wb, ws, `Liquidación de sueldos (${formatFechaISO(desde)} a ${formatFechaISO(hasta)})`, columnas.length);
 
-  const HEADER_COLOR = "2C1810";
-  ws.getRow(1).eachCell((cell) => {
-    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${HEADER_COLOR}` } };
-    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
-    cell.alignment = { vertical: "middle", horizontal: "center" };
-  });
-  ws.getRow(1).height = 22;
-
-  for (const f of filas) {
+  filas.forEach((f, i) => {
     const row = ws.addRow({
       nombre: f.nombre,
       tipo_pago:
@@ -70,12 +70,16 @@ export async function GET(req: NextRequest) {
       total: Number(f.total.toFixed(2)),
       advertencias: f.advertencias.join(" · "),
     });
+    for (const key of ["horas_trabajadas", "horas_pactadas", "horas_extra"]) row.getCell(key).numFmt = "0.00";
+    for (const key of ["base", "descuento_tardanza", "descuento_ausencia", "total_por_horas", "adelantos", "total"]) row.getCell(key).numFmt = "#,##0.00";
     row.eachCell((cell) => {
       cell.alignment = { vertical: "middle" };
+      cell.fill = zebraFill(i);
     });
-  }
+  });
 
-  ws.views = [{ state: "frozen", ySplit: 1 }];
+  estilarHeader(ws, 2);
+  aplicarGrilla(ws, 2);
 
   const buffer = await wb.xlsx.writeBuffer();
 
