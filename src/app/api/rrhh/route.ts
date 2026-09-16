@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import db, { calcularSaldoVacaciones, crearAusenciaReportada, getEmpleadoById, listAusenciasManuales, eliminarAusenciasReportadasManuales } from "@/lib/db";
+import db, { calcularSaldoVacaciones, crearAusenciaReportada, getEmpleadoById, listAusenciasManuales, eliminarAusenciasReportadasManuales, eliminarAvisosBotMany } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -230,10 +230,7 @@ export async function DELETE(req: NextRequest) {
   const messageIds = ids.filter((id) => id > 0);
   const manualIds = ids.filter((id) => id < 0).map((id) => -id);
 
-  if (messageIds.length > 0) {
-    const placeholders = messageIds.map(() => "?").join(", ");
-    db.prepare(`DELETE FROM messages WHERE id IN (${placeholders}) AND role = 'assistant'`).run(...messageIds);
-  }
+  eliminarAvisosBotMany(messageIds);
   eliminarAusenciasReportadasManuales(manualIds);
 
   return NextResponse.json({ ok: true, deleted: ids.length });

@@ -759,6 +759,29 @@ export function eliminarAusenciasReportadasManuales(ids: number[]): void {
   db.prepare(`DELETE FROM ausencias_reportadas WHERE id IN (${placeholders}) AND admin_message_id IS NULL`).run(...ids);
 }
 
+// Borra un aviso que vino del bot: además del mensaje en `messages`, hay que
+// borrar la fila de `ausencias_reportadas` (y desvincular certificados_pendientes)
+// que lo referencian por admin_message_id — si no, la FK impide borrar el
+// mensaje y el registro queda "atascado" en el panel de RRHH.
+export function eliminarAvisoBot(messageId: number): boolean {
+  return withTransaction(() => {
+    db.prepare("DELETE FROM ausencias_reportadas WHERE admin_message_id = ?").run(messageId);
+    db.prepare("UPDATE certificados_pendientes SET admin_message_id = NULL WHERE admin_message_id = ?").run(messageId);
+    const info = db.prepare("DELETE FROM messages WHERE id = ? AND role = 'assistant'").run(messageId);
+    return info.changes > 0;
+  });
+}
+
+export function eliminarAvisosBotMany(messageIds: number[]): void {
+  if (messageIds.length === 0) return;
+  withTransaction(() => {
+    const placeholders = messageIds.map(() => "?").join(", ");
+    db.prepare(`DELETE FROM ausencias_reportadas WHERE admin_message_id IN (${placeholders})`).run(...messageIds);
+    db.prepare(`UPDATE certificados_pendientes SET admin_message_id = NULL WHERE admin_message_id IN (${placeholders})`).run(...messageIds);
+    db.prepare(`DELETE FROM messages WHERE id IN (${placeholders}) AND role = 'assistant'`).run(...messageIds);
+  });
+}
+
 // Avisos cuyo rango [fecha_inicio, fecha_fin] se solapa con [desde, hasta].
 function getAusenciasReportadas(desde: string, hasta: string): AusenciaReportada[] {
   return db
