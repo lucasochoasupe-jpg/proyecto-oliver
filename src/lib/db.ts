@@ -2664,9 +2664,16 @@ export function calcularSaldoVacaciones(anio?: number): SaldoVacacionesEmpleado[
       let antiguedadAnios: number;
       let diasAsignados: number;
       if (ingresoEnEsteAnio) {
-        // Primer año: proporcional, 1 día cada 20 trabajados (LCT art. 153).
+        // Primer año: si llega a trabajar la mitad de los días hábiles del año
+        // tiene licencia completa (LCT art. 150/151); si no, proporcional a
+        // razón de 1 día cada 20 trabajados (LCT art. 153).
         antiguedadAnios = 0;
-        diasAsignados = Math.floor(diasEntreISO(emp.fecha_ingreso, finAnio) / 20);
+        const diasTrabajadosHastaFin = diasEntreISO(emp.fecha_ingreso, finAnio);
+        const diasCalendarioAnio = diasEntreISO(inicioAnio, finAnio);
+        diasAsignados =
+          diasTrabajadosHastaFin >= diasCalendarioAnio / 2
+            ? diasVacacionesLey(0)
+            : Math.floor(diasTrabajadosHastaFin / 20);
       } else {
         antiguedadAnios = añosCompletos(emp.fecha_ingreso, finAnio);
         diasAsignados = diasVacacionesLey(antiguedadAnios);
