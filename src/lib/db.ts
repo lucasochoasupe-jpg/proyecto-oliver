@@ -210,6 +210,7 @@ db.exec(`
     origen TEXT CHECK(origen IN ('certificado_bot', 'manual')) NOT NULL,
     certificado_pendiente_id INTEGER REFERENCES certificados_pendientes(id),
     subido_por TEXT,
+    etiqueta TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
@@ -296,6 +297,7 @@ db.exec(`
 try { db.exec("ALTER TABLE turno_templates ADD COLUMN dias_semana TEXT"); } catch {}
 try { db.exec("ALTER TABLE turno_templates ADD COLUMN tolerancia_min INTEGER"); } catch {}
 try { db.exec("ALTER TABLE horarios_empleado ADD COLUMN tolerancia_min INTEGER"); } catch {}
+try { db.exec("ALTER TABLE legajo_archivos ADD COLUMN etiqueta TEXT"); } catch {}
 
 // Migración: sucursal_id se creó NOT NULL (los turnos comparaban sucursal
 // contra la marcación real). Ahora la comparación es solo empleado + día +
@@ -812,6 +814,7 @@ export interface LegajoArchivo {
   origen: "certificado_bot" | "manual";
   certificado_pendiente_id: number | null;
   subido_por: string | null;
+  etiqueta: string | null; // nombre descriptivo puesto a mano (p.ej. "Certificado - reposo 5 días"), para distinguir archivos con nombres crípticos (sobre todo los que llegan por WhatsApp)
   created_at: number;
 }
 
@@ -832,6 +835,7 @@ export function guardarLegajoArchivo(data: {
   origen: "certificado_bot" | "manual";
   certificadoPendienteId?: number | null;
   subidoPor?: string | null;
+  etiqueta?: string | null;
 }): LegajoArchivo {
   const carpeta = carpetaLegajo(data.empleadoId);
   fs.mkdirSync(carpeta, { recursive: true });
@@ -842,8 +846,8 @@ export function guardarLegajoArchivo(data: {
   const info = db
     .prepare(
       `INSERT INTO legajo_archivos
-         (empleado_id, nombre_original, nombre_archivo, mimetype, tamanio_bytes, origen, certificado_pendiente_id, subido_por)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+         (empleado_id, nombre_original, nombre_archivo, mimetype, tamanio_bytes, origen, certificado_pendiente_id, subido_por, etiqueta)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       data.empleadoId,
@@ -853,10 +857,20 @@ export function guardarLegajoArchivo(data: {
       data.buffer.length,
       data.origen,
       data.certificadoPendienteId ?? null,
-      data.subidoPor ?? null
+      data.subidoPor ?? null,
+      data.etiqueta?.trim() || null
     );
 
   return getLegajoArchivo(Number(info.lastInsertRowid))!;
+}
+
+// Permite ponerle o cambiarle el nombre descriptivo a un archivo ya subido —
+// clave para los certificados que llegan por WhatsApp con nombres crípticos
+// (p.ej. "DU_40924942.pdf") y para poder distinguir a simple vista archivos
+// manuales cargados sin un nombre claro.
+export function renombrarLegajoArchivo(id: number, etiqueta: string | null): LegajoArchivo | null {
+  db.prepare("UPDATE legajo_archivos SET etiqueta = ? WHERE id = ?").run(etiqueta?.trim() || null, id);
+  return getLegajoArchivo(id);
 }
 
 export function listLegajoArchivos(empleadoId: number): LegajoArchivo[] {

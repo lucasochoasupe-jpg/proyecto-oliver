@@ -581,6 +581,7 @@ export default function RRHHPage() {
                             target="_blank"
                             rel="noopener noreferrer"
                             onClick={(e) => e.stopPropagation()}
+                            title={a.archivos[0].etiqueta || a.archivos[0].nombre_original}
                             className="text-xs text-[#D4A843] hover:text-[#2C1810] underline font-medium whitespace-nowrap"
                           >
                             📎 {a.archivos.length === 1 ? "Ver archivo" : `Ver (${a.archivos.length})`}
@@ -695,7 +696,7 @@ export default function RRHHPage() {
                         rel="noopener noreferrer"
                         className="flex items-center justify-between gap-2 bg-[#FAF7F2] border border-[#EDE0CC] rounded-lg px-3 py-2 hover:border-[#D4A843] transition-colors"
                       >
-                        <span className="text-sm text-[#2C1810] font-medium truncate">📎 {archivo.nombre_original}</span>
+                        <span className="text-sm text-[#2C1810] font-medium truncate">📎 {archivo.etiqueta || archivo.nombre_original}</span>
                         <span className="text-xs text-[#B89070] font-mono shrink-0">{formatTamanio(archivo.tamanio_bytes)}</span>
                       </a>
                     ))}

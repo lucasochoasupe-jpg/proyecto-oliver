@@ -24,6 +24,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const formData = await req.formData().catch(() => null);
   const file = formData?.get("file");
+  const etiqueta = formData?.get("etiqueta");
   if (!file || !(file instanceof File)) {
     return NextResponse.json({ error: "Falta el archivo" }, { status: 400 });
   }
@@ -42,6 +43,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     mimetype: file.type || "application/octet-stream",
     origen: "manual",
     subidoPor: process.env.DASHBOARD_USER ?? null,
+    etiqueta: typeof etiqueta === "string" ? etiqueta : null,
   });
 
   return NextResponse.json(archivo, { status: 201 });
