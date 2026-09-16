@@ -890,6 +890,22 @@ export function listLegajoArchivosPorAdminMessageIds(messageIds: number[]): Map<
   return map;
 }
 
+// Certificados "inline" — el empleado contestó que ya tenía el certificado
+// justo al avisar la Enfermedad (ver "certificado_inline_esperando_archivo"
+// en rrhh-flow.ts), a diferencia del submenú "Entregar certificado pendiente"
+// que sí crea una fila en certificados_pendientes. Estos quedan sueltos
+// (certificado_pendiente_id NULL) y no se pueden unir al aviso por id; el
+// panel de RRHH los empareja por cercanía de horario (ver [[emparejarCertificadosInline]]).
+export function listLegajoArchivosInlinePorEmpleado(empleadoId: number): LegajoArchivo[] {
+  return db
+    .prepare(
+      `SELECT * FROM legajo_archivos
+       WHERE empleado_id = ? AND origen = 'certificado_bot' AND certificado_pendiente_id IS NULL
+       ORDER BY created_at ASC`
+    )
+    .all(empleadoId) as unknown as LegajoArchivo[];
+}
+
 export function getLegajoArchivo(id: number): LegajoArchivo | null {
   return (db.prepare("SELECT * FROM legajo_archivos WHERE id = ?").get(id) as unknown as LegajoArchivo | undefined) ?? null;
 }

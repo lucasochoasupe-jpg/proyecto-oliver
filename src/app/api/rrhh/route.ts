@@ -6,6 +6,7 @@ import db, {
   getEmpleadoByNombre,
   listAusenciasManuales,
   listLegajoArchivosPorAdminMessageIds,
+  listLegajoArchivosInlinePorEmpleado,
   eliminarAusenciasReportadasManuales,
   eliminarAvisosBotMany,
   type LegajoArchivo,
@@ -152,6 +153,28 @@ export async function GET() {
         empleadoIdPorNombre.set(a.nombre, getEmpleadoByNombre(a.nombre)?.id ?? null);
       }
       a.empleadoId = empleadoIdPorNombre.get(a.nombre) ?? null;
+    }
+
+    // Certificados "inline" (el empleado dijo que ya lo tenía justo al avisar,
+    // en vez de pasar por el submenú "Entregar certificado pendiente") no
+    // quedan vinculados a ningún id — se emparejan con el aviso del mismo
+    // empleado que ocurrió justo antes, dentro de una ventana corta (llegan
+    // segundos/minutos después, en la misma conversación).
+    const VENTANA_INLINE_SEG = 30 * 60;
+    const inlinePorEmpleado = new Map<number, LegajoArchivo[]>();
+    for (const a of [...ausencias].sort((x, y) => x.fecha - y.fecha)) {
+      if (a.archivos.length > 0 || !a.empleadoId) continue;
+      if (!inlinePorEmpleado.has(a.empleadoId)) {
+        inlinePorEmpleado.set(a.empleadoId, listLegajoArchivosInlinePorEmpleado(a.empleadoId));
+      }
+      const disponibles = inlinePorEmpleado.get(a.empleadoId)!;
+      const idx = disponibles.findIndex(
+        (f) => f.created_at >= a.fecha && f.created_at - a.fecha <= VENTANA_INLINE_SEG
+      );
+      if (idx !== -1) {
+        a.archivos = [disponibles[idx]];
+        disponibles.splice(idx, 1);
+      }
     }
 
     ausencias.sort((a, b) => b.fecha - a.fecha);
