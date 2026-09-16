@@ -84,7 +84,7 @@ export async function GET(req: NextRequest) {
     sucursal: string | null;
     fecha: string;
     orden: number; // unix sec para ordenar dentro del mismo día
-    tipo: "Turno" | "Ausencia" | "Sin par";
+    tipo: "Asistencia" | "Inasistencia" | "Sin par";
     entradaReal: string;
     entradaEsperada: string;
     diffEntrada: number | null;
@@ -102,7 +102,7 @@ export async function GET(req: NextRequest) {
       sucursal: c.sucursal_nombre,
       fecha: c.fecha,
       orden: c.entrada_real,
-      tipo: "Turno",
+      tipo: "Asistencia",
       entradaReal: formatHora(c.entrada_real),
       entradaEsperada: c.entrada_esperada ?? "",
       diffEntrada: c.diff_entrada_min,
@@ -120,7 +120,7 @@ export async function GET(req: NextRequest) {
       sucursal: a.sucursal_nombre,
       fecha: a.fecha,
       orden: new Date(`${a.fecha}T00:00:00Z`).getTime() / 1000,
-      tipo: "Ausencia",
+      tipo: "Inasistencia",
       entradaReal: "",
       entradaEsperada: a.hora_inicio,
       diffEntrada: null,
@@ -219,7 +219,7 @@ export async function GET(req: NextRequest) {
       estado: f.estado,
     });
     if (f.horas !== null) row.getCell("horas").numFmt = "0.00";
-    row.eachCell((cell) => {
+    row.eachCell({ includeEmpty: true }, (cell) => {
       cell.alignment = { vertical: "middle" };
       cell.fill = fill(f.color);
     });
