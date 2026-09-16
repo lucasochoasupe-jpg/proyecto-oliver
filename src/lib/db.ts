@@ -865,6 +865,31 @@ export function listLegajoArchivos(empleadoId: number): LegajoArchivo[] {
     .all(empleadoId) as unknown as LegajoArchivo[];
 }
 
+// Certificados que el bot guardó en el legajo, agrupados por el mensaje de
+// aviso a admin que los originó (ver [[crearCertificadoPendiente]] y
+// guardarLegajoArchivo en baileys/handler.ts) — permite mostrarlos en el
+// panel de RRHH junto al aviso, sin tener que ir a Legajos.
+export function listLegajoArchivosPorAdminMessageIds(messageIds: number[]): Map<number, LegajoArchivo[]> {
+  const map = new Map<number, LegajoArchivo[]>();
+  if (messageIds.length === 0) return map;
+  const placeholders = messageIds.map(() => "?").join(", ");
+  const rows = db
+    .prepare(
+      `SELECT la.*, cp.admin_message_id AS admin_message_id
+       FROM legajo_archivos la
+       JOIN certificados_pendientes cp ON cp.id = la.certificado_pendiente_id
+       WHERE cp.admin_message_id IN (${placeholders})
+       ORDER BY la.created_at DESC`
+    )
+    .all(...messageIds) as unknown as (LegajoArchivo & { admin_message_id: number })[];
+  for (const { admin_message_id, ...archivo } of rows) {
+    const lista = map.get(admin_message_id) ?? [];
+    lista.push(archivo);
+    map.set(admin_message_id, lista);
+  }
+  return map;
+}
+
 export function getLegajoArchivo(id: number): LegajoArchivo | null {
   return (db.prepare("SELECT * FROM legajo_archivos WHERE id = ?").get(id) as unknown as LegajoArchivo | undefined) ?? null;
 }

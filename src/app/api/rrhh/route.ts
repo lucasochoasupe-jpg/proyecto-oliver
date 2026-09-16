@@ -1,5 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import db, { calcularSaldoVacaciones, crearAusenciaReportada, getEmpleadoById, listAusenciasManuales, eliminarAusenciasReportadasManuales, eliminarAvisosBotMany } from "@/lib/db";
+import db, {
+  calcularSaldoVacaciones,
+  crearAusenciaReportada,
+  getEmpleadoById,
+  getEmpleadoByNombre,
+  listAusenciasManuales,
+  listLegajoArchivosPorAdminMessageIds,
+  eliminarAusenciasReportadasManuales,
+  eliminarAvisosBotMany,
+  type LegajoArchivo,
+} from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +26,8 @@ export interface AusenciaRecord {
   fecha: number; // unix timestamp
   raw: string;
   origen?: "manual"; // ausente = viene del bot (aviso de WhatsApp)
+  archivos: LegajoArchivo[]; // certificados que el empleado mandó por WhatsApp, si los hay
+  empleadoId: number | null; // para linkear al legajo completo del empleado
 }
 
 const CATEGORIAS_MANUALES = ["Vacaciones", "Enfermedad", "Motivo Personal"] as const;
@@ -27,7 +39,7 @@ function formatFechaCorta(iso: string): string {
 
 function parseAdminBlock(
   content: string
-): Omit<AusenciaRecord, "id" | "phone" | "fecha" | "certificadoRecibidoEn"> | null {
+): Omit<AusenciaRecord, "id" | "phone" | "fecha" | "certificadoRecibidoEn" | "archivos" | "empleadoId"> | null {
   // Intentar con etiquetas <ADMIN> primero, luego sin etiquetas
   const tagMatch = content.match(/<ADMIN>([\s\S]*?)<\/ADMIN>/i);
   const raw = tagMatch
@@ -98,6 +110,8 @@ export async function GET() {
         ...parsed,
         certificadoPendiente: parsed.certificadoPendiente && resueltoAt === null,
         certificadoRecibidoEn: resueltoAt,
+        archivos: [],
+        empleadoId: null,
       });
     }
 
@@ -122,8 +136,24 @@ export async function GET() {
         fecha: a.created_at,
         raw: "",
         origen: "manual",
+        archivos: [],
+        empleadoId: null,
       });
     }
+    // Certificados que el empleado ya mandó por WhatsApp, para mostrarlos acá
+    // sin tener que ir a Legajos (ver [[listLegajoArchivosPorAdminMessageIds]]).
+    const archivosPorMensaje = listLegajoArchivosPorAdminMessageIds(
+      ausencias.filter((a) => a.id > 0).map((a) => a.id)
+    );
+    const empleadoIdPorNombre = new Map<string, number | null>();
+    for (const a of ausencias) {
+      if (a.id > 0) a.archivos = archivosPorMensaje.get(a.id) ?? [];
+      if (!empleadoIdPorNombre.has(a.nombre)) {
+        empleadoIdPorNombre.set(a.nombre, getEmpleadoByNombre(a.nombre)?.id ?? null);
+      }
+      a.empleadoId = empleadoIdPorNombre.get(a.nombre) ?? null;
+    }
+
     ausencias.sort((a, b) => b.fecha - a.fecha);
 
     // Métricas resumen

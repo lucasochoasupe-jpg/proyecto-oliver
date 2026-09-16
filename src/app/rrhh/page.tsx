@@ -49,6 +49,12 @@ function toISODay(unix: number) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+function formatTamanio(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function clasificarMotivo(motivo: string): string {
   const m = motivo.toLowerCase();
   if (m.includes("urgencia")) return "Urgencia";
@@ -557,17 +563,30 @@ export default function RRHHPage() {
                       <span className="text-xs ml-1 text-[#B89070]">{formatTime(a.fecha)}</span>
                     </td>
                     <td className="px-4 py-3" data-label="Certificado">
-                      {a.certificadoPendiente ? (
-                        <span className="text-xs bg-amber-100 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full font-medium">
-                          ⚠ Pendiente
-                        </span>
-                      ) : a.certificadoRecibidoEn ? (
-                        <span className="text-xs bg-emerald-100 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full font-medium">
-                          ✅ Recibido
-                        </span>
-                      ) : (
-                        <span className="text-xs text-[#8B6347]">—</span>
-                      )}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {a.certificadoPendiente ? (
+                          <span className="text-xs bg-amber-100 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full font-medium">
+                            ⚠ Pendiente
+                          </span>
+                        ) : a.certificadoRecibidoEn ? (
+                          <span className="text-xs bg-emerald-100 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full font-medium">
+                            ✅ Recibido
+                          </span>
+                        ) : (
+                          <span className="text-xs text-[#8B6347]">—</span>
+                        )}
+                        {a.archivos.length > 0 && (
+                          <a
+                            href={`/api/legajos/${a.archivos[0].empleado_id}/${a.archivos[0].id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-xs text-[#D4A843] hover:text-[#2C1810] underline font-medium whitespace-nowrap"
+                          >
+                            📎 {a.archivos.length === 1 ? "Ver archivo" : `Ver (${a.archivos.length})`}
+                          </a>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
@@ -662,6 +681,36 @@ export default function RRHHPage() {
                 <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm text-emerald-700">
                   ✅ Certificado recibido el {formatDate(detalle.certificadoRecibidoEn)} a las{" "}
                   {formatTime(detalle.certificadoRecibidoEn)}.
+                </div>
+              )}
+              {detalle.archivos.length > 0 && (
+                <div className="flex gap-2">
+                  <span className="text-xs text-[#8B6347] w-24 shrink-0 pt-1">Archivos</span>
+                  <div className="flex-1 space-y-1.5">
+                    {detalle.archivos.map((archivo) => (
+                      <a
+                        key={archivo.id}
+                        href={`/api/legajos/${archivo.empleado_id}/${archivo.id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center justify-between gap-2 bg-[#FAF7F2] border border-[#EDE0CC] rounded-lg px-3 py-2 hover:border-[#D4A843] transition-colors"
+                      >
+                        <span className="text-sm text-[#2C1810] font-medium truncate">📎 {archivo.nombre_original}</span>
+                        <span className="text-xs text-[#B89070] font-mono shrink-0">{formatTamanio(archivo.tamanio_bytes)}</span>
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {detalle.empleadoId && (
+                <div className="flex gap-2">
+                  <span className="text-xs text-[#8B6347] w-24 shrink-0 pt-0.5">Legajo</span>
+                  <Link
+                    href={`/legajos/${detalle.empleadoId}`}
+                    className="text-sm text-[#D4A843] hover:text-[#2C1810] underline font-medium"
+                  >
+                    Ver legajo completo →
+                  </Link>
                 </div>
               )}
             </div>
