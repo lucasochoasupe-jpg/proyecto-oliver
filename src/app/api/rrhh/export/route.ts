@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import db, { listAusenciasManuales } from "@/lib/db";
-import { COLOR, fill, zebraFill, configurarColumnas, estilarHeader, aplicarGrilla, estilarFilaTotal, agregarBranding } from "@/lib/excel-style";
+import { COLOR, fill, zebraFill, configurarColumnas, estilarHeader, aplicarGrilla, estilarFilaTotal, agregarBranding, ajustarAnchoContenido } from "@/lib/excel-style";
 
 function formatFechaCorta(iso: string): string {
   return new Date(`${iso}T00:00:00Z`).toLocaleDateString("es-AR", { timeZone: "UTC", day: "2-digit", month: "2-digit", year: "numeric" });
@@ -165,6 +165,7 @@ export async function GET(req: NextRequest) {
     row.height = 18;
   });
 
+  ajustarAnchoContenido(ws, { desdeFila: 2, max: 60 });
   estilarHeader(ws, 2);
   aplicarGrilla(ws, 2);
 

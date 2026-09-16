@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import { calcularHorasTrabajadas } from "@/lib/db";
 import { AR_TZ, hoyISO, inicioDeMesISO } from "@/lib/date-ar";
-import { COLOR, fill, zebraFill, configurarColumnas, estilarHeader, aplicarGrilla, agregarBranding } from "@/lib/excel-style";
+import { COLOR, fill, zebraFill, configurarColumnas, estilarHeader, aplicarGrilla, agregarBranding, ajustarAnchoContenido } from "@/lib/excel-style";
 
 export const dynamic = "force-dynamic";
 
@@ -68,6 +68,7 @@ export async function GET(req: NextRequest) {
       cell.fill = e.enCurso ? fill(COLOR.pendiente) : zebraFill(i);
     });
   });
+  ajustarAnchoContenido(wsResumen, { desdeFila: 2 });
   estilarHeader(wsResumen, 2);
   aplicarGrilla(wsResumen, 2);
 
@@ -104,6 +105,7 @@ export async function GET(req: NextRequest) {
       cell.fill = t.horas === null ? fill(COLOR.pendiente) : zebraFill(i);
     });
   });
+  ajustarAnchoContenido(wsDetalle, { desdeFila: 2 });
   estilarHeader(wsDetalle, 2);
   aplicarGrilla(wsDetalle, 2);
 

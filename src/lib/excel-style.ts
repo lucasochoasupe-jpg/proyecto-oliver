@@ -59,6 +59,28 @@ export function estilarHeader(ws: ExcelJS.Worksheet, headerRow = 1) {
   }
 }
 
+/** Ensancha cada columna al texto más largo que realmente contiene (header + datos), no solo
+ * al título — evita que un valor puntual (p.ej. "Inasistencia" o "Marcación de entrada sin par")
+ * quede cortado visualmente aunque el título de la columna sea corto. Nunca angosta una columna
+ * por debajo del ancho ya configurado, y respeta `max` para no estirar de más columnas de texto libre. */
+export function ajustarAnchoContenido(ws: ExcelJS.Worksheet, opts?: { desdeFila?: number; max?: number }) {
+  const desdeFila = opts?.desdeFila ?? 1;
+  const max = opts?.max ?? 45;
+  const lastRow = ws.lastRow?.number ?? desdeFila;
+  const lastCol = ws.columnCount;
+  const anchos: number[] = new Array(lastCol + 1).fill(0);
+  for (let r = desdeFila; r <= lastRow; r++) {
+    ws.getRow(r).eachCell({ includeEmpty: true }, (cell, colNumber) => {
+      const texto = cell.text ?? String(cell.value ?? "");
+      if (texto.length > anchos[colNumber]) anchos[colNumber] = texto.length;
+    });
+  }
+  for (let c = 1; c <= lastCol; c++) {
+    const columna = ws.getColumn(c);
+    columna.width = Math.max(columna.width ?? 0, Math.min(anchos[c] + 2, max));
+  }
+}
+
 /** Grilla fina alrededor de todas las celdas con datos (sin pisar bordes ya definidos, como el del header). */
 export function aplicarGrilla(ws: ExcelJS.Worksheet, desdeFila = 1) {
   const lastRow = ws.lastRow?.number ?? 1;

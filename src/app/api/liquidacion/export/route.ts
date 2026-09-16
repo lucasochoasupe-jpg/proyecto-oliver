@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import { calcularLiquidacion } from "@/lib/db";
 import { hoyISO, inicioDeMesISO } from "@/lib/date-ar";
-import { zebraFill, configurarColumnas, estilarHeader, aplicarGrilla, agregarBranding } from "@/lib/excel-style";
+import { zebraFill, configurarColumnas, estilarHeader, aplicarGrilla, agregarBranding, ajustarAnchoContenido } from "@/lib/excel-style";
 
 export const dynamic = "force-dynamic";
 
@@ -78,6 +78,7 @@ export async function GET(req: NextRequest) {
     });
   });
 
+  ajustarAnchoContenido(ws, { desdeFila: 2, max: 60 });
   estilarHeader(ws, 2);
   aplicarGrilla(ws, 2);
 

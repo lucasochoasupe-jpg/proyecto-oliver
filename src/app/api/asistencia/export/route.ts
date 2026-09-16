@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import { calcularCumplimiento, calcularAusencias, listMarcacionesHuerfanas, type CumplimientoRow } from "@/lib/db";
 import { AR_TZ, hoyISO, inicioDeMesISO } from "@/lib/date-ar";
-import { COLOR, fill, zebraFill, configurarColumnas, estilarHeader, aplicarGrilla, agregarBranding } from "@/lib/excel-style";
+import { COLOR, fill, zebraFill, configurarColumnas, estilarHeader, aplicarGrilla, agregarBranding, ajustarAnchoContenido } from "@/lib/excel-style";
 
 export const dynamic = "force-dynamic";
 
@@ -183,6 +183,7 @@ export async function GET(req: NextRequest) {
       row.getCell("ausenciasInjustificadas").fill = fill(COLOR.injustificada);
     }
   });
+  ajustarAnchoContenido(wsResumen, { desdeFila: 2 });
   estilarHeader(wsResumen, 2);
   aplicarGrilla(wsResumen, 2);
 
@@ -191,7 +192,7 @@ export async function GET(req: NextRequest) {
     { header: "Empleado", key: "nombre", width: 28 },
     { header: "Sucursal", key: "sucursal", width: 16 },
     { header: "Fecha", key: "fecha", width: 12 },
-    { header: "Tipo", key: "tipo", width: 10 },
+    { header: "Tipo", key: "tipo", width: 16 },
     { header: "Entrada real", key: "entradaReal", width: 12 },
     { header: "Entrada esperada", key: "entradaEsperada", width: 14 },
     { header: "Diferencia entrada (min)", key: "diffEntrada", width: 20 },
@@ -199,7 +200,7 @@ export async function GET(req: NextRequest) {
     { header: "Salida esperada", key: "salidaEsperada", width: 14 },
     { header: "Diferencia salida (min)", key: "diffSalida", width: 20 },
     { header: "Horas", key: "horas", width: 10 },
-    { header: "Estado", key: "estado", width: 26 },
+    { header: "Estado", key: "estado", width: 30 },
   ];
   configurarColumnas(wsDetalle, columnasDetalle, 2);
   agregarBranding(wb, wsDetalle, `Asistencia — Detalle (${formatFechaISO(desde)} a ${formatFechaISO(hasta)})`, columnasDetalle.length);
@@ -224,6 +225,7 @@ export async function GET(req: NextRequest) {
       cell.fill = fill(f.color);
     });
   }
+  ajustarAnchoContenido(wsDetalle, { desdeFila: 2 });
   estilarHeader(wsDetalle, 2);
   aplicarGrilla(wsDetalle, 2);
 
