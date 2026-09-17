@@ -14,6 +14,7 @@ const NAV_LINKS = [
   { href: "/liquidacion", label: "Liquidación", icon: "💵" },
   { href: "/adelantos", label: "Adelantos", icon: "💸" },
   { href: "/legajos", label: "Legajos", icon: "📁" },
+  { href: "/configuracion", label: "Configuración", icon: "⚙️" },
   { href: "/", label: "Chat", icon: "💬" },
 ];
 

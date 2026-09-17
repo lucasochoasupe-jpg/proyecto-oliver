@@ -13,8 +13,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "nombre requerido" }, { status: 400 });
   }
   try {
-    insertEmpleado(body.nombre.trim(), body.celular?.trim() || undefined);
-    return NextResponse.json({ ok: true });
+    const id = insertEmpleado(body.nombre.trim(), body.celular?.trim() || undefined);
+    return NextResponse.json({ ok: true, id });
   } catch {
     return NextResponse.json({ error: "El nombre ya existe" }, { status: 409 });
   }

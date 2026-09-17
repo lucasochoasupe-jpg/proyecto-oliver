@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, type ReactNode } from "react";
 import PageHeader from "@/components/PageHeader";
+import EmpleadoMultiSelect from "@/components/EmpleadoMultiSelect";
 
 interface Empleado {
   id: number;
@@ -15,6 +16,23 @@ interface Empleado {
   valor_dia: number | null;
   fecha_ingreso: string | null;
   sueldo_estimado: number | null;
+  tipo_pago_informal: "mensual" | "hora" | "dia" | null;
+  sueldo_mensual_informal: number | null;
+  valor_hora_informal: number | null;
+  valor_dia_informal: number | null;
+  cuil: string | null;
+  legajo: string | null;
+  categoria_laboral: string | null;
+  banco: string | null;
+  fecha_nacimiento: string | null;
+  direccion: string | null;
+  email: string | null;
+  dni: string | null;
+  estado_civil: string | null;
+  nacionalidad: string | null;
+  contacto_emergencia_nombre: string | null;
+  contacto_emergencia_telefono: string | null;
+  cbu: string | null;
 }
 
 interface SaldoVacaciones {
@@ -32,12 +50,62 @@ function formatMoneda(n: number) {
   return n.toLocaleString("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 });
 }
 
+function calcularEdad(fechaNacimiento: string, hoy: Date): number {
+  const [anioStr, mesStr, diaStr] = fechaNacimiento.split("-");
+  const nacimiento = new Date(Number(anioStr), Number(mesStr) - 1, Number(diaStr));
+  let edad = hoy.getFullYear() - nacimiento.getFullYear();
+  const cumplioAniversario =
+    hoy.getMonth() > nacimiento.getMonth() || (hoy.getMonth() === nacimiento.getMonth() && hoy.getDate() >= nacimiento.getDate());
+  if (!cumplioAniversario) edad -= 1;
+  return edad;
+}
+
+// Días hasta el próximo cumpleaños (0 = hoy), sin importar el año de
+// nacimiento — si ya pasó este año, se compara contra el del año que viene.
+function diasHastaProximoCumple(fechaNacimiento: string, hoy: Date): number {
+  const [, mesStr, diaStr] = fechaNacimiento.split("-");
+  const mes = Number(mesStr) - 1;
+  const dia = Number(diaStr);
+  const hoySinHora = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
+  let proximo = new Date(hoy.getFullYear(), mes, dia);
+  if (proximo < hoySinHora) proximo = new Date(hoy.getFullYear() + 1, mes, dia);
+  return Math.round((proximo.getTime() - hoySinHora.getTime()) / 86400000);
+}
+
+// El nombre siempre se guarda/muestra como "Apellido Nombre" en un solo
+// campo (es la clave que se usa para emparejar asistencia/horarios/etc en
+// todo el resto de la app) — acá solo se parte en dos inputs para cargarlo,
+// separando por el primer espacio. Para apellidos compuestos (ej. "Ruiz
+// Diaz Sol Evangelina") esta partición inicial puede no ser exacta; queda
+// editable a mano en el modal.
+function splitNombre(nombreCompleto: string): { apellido: string; nombre: string } {
+  const espacio = nombreCompleto.indexOf(" ");
+  if (espacio === -1) return { apellido: nombreCompleto, nombre: "" };
+  return { apellido: nombreCompleto.slice(0, espacio), nombre: nombreCompleto.slice(espacio + 1) };
+}
+
+function joinNombre(apellido: string, nombre: string): string {
+  return `${apellido.trim()} ${nombre.trim()}`.trim();
+}
+
+function Campo({ label, className, children }: { label: string; className?: string; children: ReactNode }) {
+  return (
+    <div className={`flex flex-col gap-1 ${className ?? ""}`}>
+      <label className="text-[11px] text-[#B89070]">{label}</label>
+      {children}
+    </div>
+  );
+}
+
+
 export default function EmpleadosPage() {
   const [empleados, setEmpleados] = useState<Empleado[]>([]);
   const [saldos, setSaldos] = useState<Record<number, SaldoVacaciones>>({});
   const [loading, setLoading] = useState(true);
-  const [busqueda, setBusqueda] = useState("");
+  const [nombresFiltro, setNombresFiltro] = useState<string[]>([]);
+  const [ordenAsc, setOrdenAsc] = useState(true);
   const [soloActivos, setSoloActivos] = useState(true);
+  const [detalleEmpleado, setDetalleEmpleado] = useState<number | null>(null);
 
   // Estado de edición inline
   const [editando, setEditando] = useState<
@@ -45,6 +113,8 @@ export default function EmpleadosPage() {
       number,
       {
         nombre: string;
+        apellido: string;
+        nombrePila: string;
         celular: string;
         tipo_pago: string;
         sueldo_mensual: string;
@@ -52,6 +122,23 @@ export default function EmpleadosPage() {
         valor_dia: string;
         fecha_ingreso: string;
         sueldo_estimado: string;
+        tipo_pago_informal: string;
+        sueldo_mensual_informal: string;
+        valor_hora_informal: string;
+        valor_dia_informal: string;
+        cuil: string;
+        legajo: string;
+        categoria_laboral: string;
+        banco: string;
+        fecha_nacimiento: string;
+        direccion: string;
+        email: string;
+        dni: string;
+        estado_civil: string;
+        nacionalidad: string;
+        contacto_emergencia_nombre: string;
+        contacto_emergencia_telefono: string;
+        cbu: string;
       }
     >
   >({});
@@ -60,7 +147,8 @@ export default function EmpleadosPage() {
 
   // Nuevo empleado
   const [mostrarForm, setMostrarForm] = useState(false);
-  const [nuevoNombre, setNuevoNombre] = useState("");
+  const [nuevoApellido, setNuevoApellido] = useState("");
+  const [nuevoNombrePila, setNuevoNombrePila] = useState("");
   const [nuevoCelular, setNuevoCelular] = useState("");
   const [agregando, setAgregando] = useState(false);
   const [errorForm, setErrorForm] = useState("");
@@ -88,10 +176,13 @@ export default function EmpleadosPage() {
   }, [empleados]);
 
   function startEdit(e: Empleado) {
+    const { apellido, nombre: nombrePila } = splitNombre(e.nombre);
     setEditando((prev) => ({
       ...prev,
       [e.id]: {
         nombre: e.nombre,
+        apellido,
+        nombrePila,
         celular: e.celular ?? "",
         tipo_pago: e.tipo_pago ?? "",
         sueldo_mensual: e.sueldo_mensual !== null ? String(e.sueldo_mensual) : "",
@@ -99,6 +190,23 @@ export default function EmpleadosPage() {
         valor_dia: e.valor_dia !== null ? String(e.valor_dia) : "",
         fecha_ingreso: e.fecha_ingreso ?? "",
         sueldo_estimado: e.sueldo_estimado !== null ? String(e.sueldo_estimado) : "",
+        tipo_pago_informal: e.tipo_pago_informal ?? "",
+        sueldo_mensual_informal: e.sueldo_mensual_informal !== null ? String(e.sueldo_mensual_informal) : "",
+        valor_hora_informal: e.valor_hora_informal !== null ? String(e.valor_hora_informal) : "",
+        valor_dia_informal: e.valor_dia_informal !== null ? String(e.valor_dia_informal) : "",
+        cuil: e.cuil ?? "",
+        legajo: e.legajo ?? "",
+        categoria_laboral: e.categoria_laboral ?? "",
+        banco: e.banco ?? "",
+        fecha_nacimiento: e.fecha_nacimiento ?? "",
+        direccion: e.direccion ?? "",
+        email: e.email ?? "",
+        dni: e.dni ?? "",
+        estado_civil: e.estado_civil ?? "",
+        nacionalidad: e.nacionalidad ?? "",
+        contacto_emergencia_nombre: e.contacto_emergencia_nombre ?? "",
+        contacto_emergencia_telefono: e.contacto_emergencia_telefono ?? "",
+        cbu: e.cbu ?? "",
       },
     }));
   }
@@ -124,6 +232,24 @@ export default function EmpleadosPage() {
         fecha_ingreso: e.fecha_ingreso.trim() || null,
         sueldo_estimado:
           (e.tipo_pago === "hora" || e.tipo_pago === "dia") && e.sueldo_estimado.trim() ? Number(e.sueldo_estimado) : null,
+        tipo_pago_informal: e.tipo_pago_informal || null,
+        sueldo_mensual_informal:
+          e.tipo_pago_informal === "mensual" && e.sueldo_mensual_informal.trim() ? Number(e.sueldo_mensual_informal) : null,
+        valor_hora_informal: e.tipo_pago_informal && e.valor_hora_informal.trim() ? Number(e.valor_hora_informal) : null,
+        valor_dia_informal: e.tipo_pago_informal === "dia" && e.valor_dia_informal.trim() ? Number(e.valor_dia_informal) : null,
+        cuil: e.cuil.trim() || null,
+        legajo: e.legajo.trim() || null,
+        categoria_laboral: e.categoria_laboral.trim() || null,
+        banco: e.banco.trim() || null,
+        fecha_nacimiento: e.fecha_nacimiento.trim() || null,
+        direccion: e.direccion.trim() || null,
+        email: e.email.trim() || null,
+        dni: e.dni.trim() || null,
+        estado_civil: e.estado_civil.trim() || null,
+        nacionalidad: e.nacionalidad.trim() || null,
+        contacto_emergencia_nombre: e.contacto_emergencia_nombre.trim() || null,
+        contacto_emergencia_telefono: e.contacto_emergencia_telefono.trim() || null,
+        cbu: e.cbu.trim() || null,
       }),
     });
     await fetchData();
@@ -149,13 +275,14 @@ export default function EmpleadosPage() {
   }
 
   async function agregar() {
-    if (!nuevoNombre.trim()) { setErrorForm("El nombre es obligatorio."); return; }
+    if (!nuevoApellido.trim()) { setErrorForm("El apellido es obligatorio."); return; }
+    const nombreCompleto = joinNombre(nuevoApellido, nuevoNombrePila);
     setAgregando(true);
     setErrorForm("");
     const res = await fetch("/api/empleados", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ nombre: nuevoNombre.trim(), celular: nuevoCelular.trim() || undefined }),
+      body: JSON.stringify({ nombre: nombreCompleto, celular: nuevoCelular.trim() || undefined }),
     });
     setAgregando(false);
     if (!res.ok) {
@@ -163,20 +290,55 @@ export default function EmpleadosPage() {
       setErrorForm(body.error ?? "Error al agregar.");
       return;
     }
-    setNuevoNombre("");
+    const { id } = (await res.json()) as { id: number };
+    const nuevoEmpleado: Empleado = {
+      id,
+      nombre: nombreCompleto,
+      celular: nuevoCelular.trim() || null,
+      jid: null,
+      activo: 1,
+      tipo_pago: null,
+      sueldo_mensual: null,
+      valor_hora: null,
+      valor_dia: null,
+      fecha_ingreso: null,
+      sueldo_estimado: null,
+      tipo_pago_informal: null,
+      sueldo_mensual_informal: null,
+      valor_hora_informal: null,
+      valor_dia_informal: null,
+      cuil: null,
+      legajo: null,
+      categoria_laboral: null,
+      banco: null,
+      fecha_nacimiento: null,
+      direccion: null,
+      email: null,
+      dni: null,
+      estado_civil: null,
+      nacionalidad: null,
+      contacto_emergencia_nombre: null,
+      contacto_emergencia_telefono: null,
+      cbu: null,
+    };
+    setNuevoApellido("");
+    setNuevoNombrePila("");
     setNuevoCelular("");
     setMostrarForm(false);
-    fetchData();
+    await fetchData();
+    // Se abre directo el modal de detalles para completar pago/legales/nómina
+    // en el momento, en vez de tener que buscarlo después en la tabla.
+    startEdit(nuevoEmpleado);
+    setDetalleEmpleado(id);
   }
 
-  const filtrados = empleados.filter((e) => {
-    if (soloActivos && !e.activo) return false;
-    if (busqueda) {
-      const q = busqueda.toLowerCase();
-      return e.nombre.toLowerCase().includes(q) || (e.celular ?? "").includes(q);
-    }
-    return true;
-  });
+  const filtrados = empleados
+    .filter((e) => {
+      if (soloActivos && !e.activo) return false;
+      if (nombresFiltro.length > 0) return nombresFiltro.includes(e.nombre);
+      return true;
+    })
+    .sort((a, b) => (ordenAsc ? a.nombre.localeCompare(b.nombre) : b.nombre.localeCompare(a.nombre)));
 
   function toggleSelect(id: number) {
     setSelected((prev) => {
@@ -217,11 +379,20 @@ export default function EmpleadosPage() {
   const activos = empleados.filter((e) => e.activo).length;
   const sinCelular = empleados.filter((e) => e.activo && !e.celular).length;
 
+  const hoy = new Date();
+  const cumpleañosProximos = empleados
+    .filter((e) => e.activo && e.fecha_nacimiento)
+    .map((e) => ({ emp: e, dias: diasHastaProximoCumple(e.fecha_nacimiento!, hoy) }))
+    .filter((c) => c.dias <= 6)
+    .sort((a, b) => a.dias - b.dias);
+  const cumpleañosHoy = cumpleañosProximos.filter((c) => c.dias === 0);
+  const cumpleañosSemana = cumpleañosProximos.filter((c) => c.dias > 0);
+
   return (
     <div className="min-h-screen bg-[#FAF7F2]">
       <PageHeader subtitle="Gestión de Empleados" />
 
-      <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
+      <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
             <h1 className="text-xl font-bold text-[#2C1810]">Empleados</h1>
@@ -229,17 +400,41 @@ export default function EmpleadosPage() {
               {activos} activos · {sinCelular > 0 && <span className="text-amber-600">{sinCelular} sin celular</span>}
             </p>
           </div>
-          <button
-            onClick={() => { setMostrarForm(true); setErrorForm(""); }}
-            className="text-sm text-white bg-[#2C1810] hover:bg-[#3D2418] px-4 py-2 rounded-full font-medium active:scale-95 transition-colors"
-          >
-            + Agregar empleado
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => { window.location.href = "/api/empleados/export"; }}
+              className="text-sm text-[#8B6347] hover:text-[#2C1810] border border-[#D4A843] hover:border-[#2C1810] px-4 py-2 rounded-full active:scale-95 transition-colors"
+            >
+              ↓ Exportar Excel
+            </button>
+            <button
+              onClick={() => { setMostrarForm(true); setErrorForm(""); }}
+              className="text-sm text-white bg-[#2C1810] hover:bg-[#3D2418] px-4 py-2 rounded-full font-medium active:scale-95 transition-colors"
+            >
+              + Agregar empleado
+            </button>
+          </div>
         </div>
 
         {sinCelular > 0 && (
           <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-700">
             ⚠ {sinCelular} empleado{sinCelular > 1 ? "s" : ""} activo{sinCelular > 1 ? "s" : ""} sin celular registrado. El número no aparecerá en los registros de asistencia.
+          </div>
+        )}
+
+        {cumpleañosProximos.length > 0 && (
+          <div className="bg-pink-50 border border-pink-200 rounded-xl px-4 py-3 text-sm text-pink-700 space-y-1">
+            {cumpleañosHoy.length > 0 && (
+              <p>🎂 Hoy cumple{cumpleañosHoy.length > 1 ? "n" : ""} años: {cumpleañosHoy.map((c) => c.emp.nombre).join(", ")}</p>
+            )}
+            {cumpleañosSemana.length > 0 && (
+              <p>
+                🎉 Esta semana cumplen años:{" "}
+                {cumpleañosSemana
+                  .map((c) => `${c.emp.nombre} (en ${c.dias} día${c.dias > 1 ? "s" : ""})`)
+                  .join(", ")}
+              </p>
+            )}
           </div>
         )}
 
@@ -249,12 +444,23 @@ export default function EmpleadosPage() {
             <h2 className="font-semibold text-[#2C1810] text-sm">Nuevo empleado</h2>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-xs text-[#8B6347] font-medium block mb-1">Nombre y Apellido *</label>
+                <label className="text-xs text-[#8B6347] font-medium block mb-1">Apellido *</label>
                 <input
                   type="text"
-                  placeholder="Apellido Nombre"
-                  value={nuevoNombre}
-                  onChange={(e) => setNuevoNombre(e.target.value)}
+                  placeholder="Apellido"
+                  value={nuevoApellido}
+                  onChange={(e) => setNuevoApellido(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && agregar()}
+                  className="w-full border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-[#8B6347] font-medium block mb-1">Nombre</label>
+                <input
+                  type="text"
+                  placeholder="Nombre"
+                  value={nuevoNombrePila}
+                  onChange={(e) => setNuevoNombrePila(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && agregar()}
                   className="w-full border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
                 />
@@ -281,7 +487,7 @@ export default function EmpleadosPage() {
                 {agregando ? "Guardando..." : "Guardar"}
               </button>
               <button
-                onClick={() => { setMostrarForm(false); setNuevoNombre(""); setNuevoCelular(""); setErrorForm(""); }}
+                onClick={() => { setMostrarForm(false); setNuevoApellido(""); setNuevoNombrePila(""); setNuevoCelular(""); setErrorForm(""); }}
                 className="text-sm text-[#8B6347] hover:text-[#2C1810] px-4 py-1.5 rounded-lg border border-[#EDE0CC] active:scale-95 transition-colors"
               >
                 Cancelar
@@ -291,14 +497,15 @@ export default function EmpleadosPage() {
         )}
 
         {/* Filtros */}
-        <div className="bg-white rounded-xl border border-[#EDE0CC] p-3 flex flex-wrap gap-3 items-center">
-          <input
-            type="text"
-            placeholder="Buscar por nombre o celular..."
-            value={busqueda}
-            onChange={(e) => setBusqueda(e.target.value)}
-            className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-56"
-          />
+        <div className="bg-white rounded-xl border border-[#EDE0CC] p-3 flex flex-wrap gap-3 items-end">
+          <EmpleadoMultiSelect value={nombresFiltro} onChange={setNombresFiltro} label="Buscar empleados" />
+          <button
+            onClick={() => setOrdenAsc((o) => !o)}
+            className="text-sm text-[#8B6347] hover:text-[#2C1810] border border-[#EDE0CC] hover:border-[#D4A843] px-3 py-1.5 rounded-lg transition-colors"
+            title="Cambiar orden alfabético"
+          >
+            {ordenAsc ? "A → Z" : "Z → A"}
+          </button>
           <label className="flex items-center gap-2 cursor-pointer select-none">
             <input
               type="checkbox"
@@ -352,10 +559,10 @@ export default function EmpleadosPage() {
             <div className="text-center py-16 text-[#8B6347] text-sm">No hay empleados que coincidan.</div>
           ) : (
             <div className="overflow-x-auto">
-            <table className="w-full text-sm min-w-[1150px] responsive-table">
+            <table className="text-sm responsive-table">
               <thead>
                 <tr className="border-b border-[#EDE0CC] bg-[#FAF7F2]">
-                  <th className="w-10 px-4 py-3">
+                  <th className="px-4 py-3">
                     <input
                       type="checkbox"
                       checked={filtrados.length > 0 && selected.size === filtrados.length}
@@ -363,20 +570,18 @@ export default function EmpleadosPage() {
                       className="h-4 w-4 rounded border-[#D4A843] text-[#2C1810] focus:ring-[#D4A843]"
                     />
                   </th>
-                  <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Nombre y Apellido</th>
-                  <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Celular</th>
-                  <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Ingreso</th>
-                  <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">WhatsApp</th>
-                  <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Pago</th>
-                  <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Vacaciones</th>
-                  <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Estado</th>
+                  <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide whitespace-nowrap">Nombre y Apellido</th>
+                  <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide whitespace-nowrap">Celular</th>
+                  <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide whitespace-nowrap">Edad</th>
+                  <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide whitespace-nowrap">WhatsApp</th>
+                  <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide whitespace-nowrap">Pago</th>
+                  <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide whitespace-nowrap">Vacaciones</th>
+                  <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide whitespace-nowrap">Estado</th>
                   <th className="px-4 py-3"></th>
                 </tr>
               </thead>
               <tbody>
                 {filtrados.map((emp, i) => {
-                  const isEditing = !!editando[emp.id];
-                  const ed = editando[emp.id];
                   const isSelected = selected.has(emp.id);
                   return (
                     <tr
@@ -392,44 +597,20 @@ export default function EmpleadosPage() {
                         />
                       </td>
                       <td className="px-4 py-2.5" data-label="Nombre y Apellido">
-                        {isEditing ? (
-                          <input
-                            type="text"
-                            value={ed.nombre}
-                            onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], nombre: e.target.value } }))}
-                            className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none w-48"
-                          />
-                        ) : (
-                          <span className="font-medium text-[#2C1810]">{emp.nombre}</span>
-                        )}
+                        <span className="font-medium text-[#2C1810]">{emp.nombre}</span>
                       </td>
                       <td className="px-4 py-2.5" data-label="Celular">
-                        {isEditing ? (
-                          <input
-                            type="text"
-                            placeholder="3412345678"
-                            value={ed.celular}
-                            onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], celular: e.target.value } }))}
-                            className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none w-36"
-                          />
-                        ) : emp.celular ? (
+                        {emp.celular ? (
                           <span className="font-mono text-[#2C1810]">{emp.celular}</span>
                         ) : (
                           <span className="text-amber-500 italic text-xs">Sin celular</span>
                         )}
                       </td>
-                      <td className="px-4 py-2.5" data-label="Ingreso">
-                        {isEditing ? (
-                          <input
-                            type="date"
-                            value={ed.fecha_ingreso}
-                            onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], fecha_ingreso: e.target.value } }))}
-                            className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none"
-                          />
-                        ) : emp.fecha_ingreso ? (
-                          <span className="text-[#2C1810]">{new Date(`${emp.fecha_ingreso}T00:00:00Z`).toLocaleDateString("es-AR", { timeZone: "UTC" })}</span>
+                      <td className="px-4 py-2.5" data-label="Edad">
+                        {emp.fecha_nacimiento ? (
+                          <span className="text-[#2C1810]">{calcularEdad(emp.fecha_nacimiento, hoy)}</span>
                         ) : (
-                          <span className="text-amber-500 italic text-xs">Sin fecha</span>
+                          <span className="text-[#B89070] italic text-xs">—</span>
                         )}
                       </td>
                       <td className="px-4 py-2.5" data-label="WhatsApp">
@@ -445,115 +626,33 @@ export default function EmpleadosPage() {
                         )}
                       </td>
                       <td className="px-4 py-2.5" data-label="Pago">
-                        {isEditing ? (
-                          <div className="flex items-center gap-1.5">
-                            <select
-                              value={ed.tipo_pago}
-                              onChange={(e) =>
-                                setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], tipo_pago: e.target.value } }))
-                              }
-                              className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none"
-                            >
-                              <option value="">—</option>
-                              <option value="mensual">Mensual</option>
-                              <option value="hora">Por hora</option>
-                              <option value="dia">Por día</option>
-                            </select>
-                            {ed.tipo_pago === "mensual" && (
-                              <>
-                                <input
-                                  type="number"
-                                  placeholder="Sueldo mensual"
-                                  value={ed.sueldo_mensual}
-                                  onChange={(e) =>
-                                    setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], sueldo_mensual: e.target.value } }))
-                                  }
-                                  className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none w-28"
-                                />
-                                <input
-                                  type="number"
-                                  placeholder="Valor hora (referencia)"
-                                  value={ed.valor_hora}
-                                  onChange={(e) =>
-                                    setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], valor_hora: e.target.value } }))
-                                  }
-                                  className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none w-32"
-                                />
-                              </>
-                            )}
-                            {ed.tipo_pago === "hora" && (
-                              <>
-                                <input
-                                  type="number"
-                                  placeholder="Valor hora"
-                                  value={ed.valor_hora}
-                                  onChange={(e) =>
-                                    setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], valor_hora: e.target.value } }))
-                                  }
-                                  className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none w-24"
-                                />
-                                <input
-                                  type="number"
-                                  placeholder="Sueldo estimado (tope adelantos)"
-                                  value={ed.sueldo_estimado}
-                                  onChange={(e) =>
-                                    setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], sueldo_estimado: e.target.value } }))
-                                  }
-                                  className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none w-40"
-                                />
-                              </>
-                            )}
-                            {ed.tipo_pago === "dia" && (
-                              <>
-                                <input
-                                  type="number"
-                                  placeholder="Valor día"
-                                  value={ed.valor_dia}
-                                  onChange={(e) =>
-                                    setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], valor_dia: e.target.value } }))
-                                  }
-                                  className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none w-24"
-                                />
-                                <input
-                                  type="number"
-                                  placeholder="Valor hora (extra)"
-                                  value={ed.valor_hora}
-                                  onChange={(e) =>
-                                    setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], valor_hora: e.target.value } }))
-                                  }
-                                  className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none w-28"
-                                />
-                                <input
-                                  type="number"
-                                  placeholder="Sueldo estimado (tope adelantos)"
-                                  value={ed.sueldo_estimado}
-                                  onChange={(e) =>
-                                    setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], sueldo_estimado: e.target.value } }))
-                                  }
-                                  className="border border-[#D4A843] rounded-lg px-2 py-1 text-sm text-[#2C1810] outline-none w-40"
-                                />
-                              </>
-                            )}
-                          </div>
-                        ) : emp.tipo_pago === "mensual" ? (
-                          <span className="text-xs text-[#2C1810]">
-                            Mensual{emp.sueldo_mensual ? ` · ${formatMoneda(emp.sueldo_mensual)}` : ""}
-                            {emp.valor_hora ? ` (ref. ${formatMoneda(emp.valor_hora)}/h)` : ""}
-                          </span>
-                        ) : emp.tipo_pago === "hora" ? (
-                          <span className="text-xs text-[#2C1810]">
-                            Por hora{emp.valor_hora ? ` · ${formatMoneda(emp.valor_hora)}` : ""}
-                            {emp.sueldo_estimado ? ` (est. ${formatMoneda(emp.sueldo_estimado)}/mes)` : ""}
-                          </span>
-                        ) : emp.tipo_pago === "dia" ? (
-                          <span className="text-xs text-[#2C1810]">
-                            Por día{emp.valor_dia ? ` · ${formatMoneda(emp.valor_dia)}` : ""}
-                            {emp.valor_hora ? ` (extra ${formatMoneda(emp.valor_hora)}/h)` : ""}
-                            {emp.sueldo_estimado ? ` (est. ${formatMoneda(emp.sueldo_estimado)}/mes)` : ""}
-                          </span>
-                        ) : (
-                          <span className="text-xs text-[#B89070] italic">Sin definir</span>
-                        )}
+                        <div className="flex flex-col gap-0.5">
+                          {emp.tipo_pago === "mensual" ? (
+                            <span className="text-xs text-[#2C1810]">
+                              Mensual{emp.sueldo_mensual ? ` · ${formatMoneda(emp.sueldo_mensual)}` : ""}
+                            </span>
+                          ) : emp.tipo_pago === "hora" ? (
+                            <span className="text-xs text-[#2C1810]">
+                              Por hora{emp.valor_hora ? ` · ${formatMoneda(emp.valor_hora)}` : ""}
+                            </span>
+                          ) : emp.tipo_pago === "dia" ? (
+                            <span className="text-xs text-[#2C1810]">
+                              Por día{emp.valor_dia ? ` · ${formatMoneda(emp.valor_dia)}` : ""}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-[#B89070] italic">Sin definir</span>
+                          )}
+                          {emp.tipo_pago_informal && (
+                            <span className="text-xs text-[#8B6347]">
+                              Informal:{" "}
+                              {emp.tipo_pago_informal === "mensual"
+                                ? `Mensual${emp.sueldo_mensual_informal ? ` · ${formatMoneda(emp.sueldo_mensual_informal)}` : ""}`
+                                : emp.tipo_pago_informal === "hora"
+                                ? `Por hora${emp.valor_hora_informal ? ` · ${formatMoneda(emp.valor_hora_informal)}` : ""}`
+                                : `Por día${emp.valor_dia_informal ? ` · ${formatMoneda(emp.valor_dia_informal)}` : ""}`}
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-2.5" data-label="Vacaciones">
                         {(() => {
@@ -579,40 +678,26 @@ export default function EmpleadosPage() {
                       </td>
                       <td className="px-4 py-2.5 whitespace-nowrap">
                         <div className="flex items-center gap-3 justify-end">
-                          {isEditing ? (
+                          {guardado === emp.id && <span className="text-xs text-green-600">✓</span>}
+                          <button
+                            onClick={() => { startEdit(emp); setDetalleEmpleado(emp.id); }}
+                            className="text-xs text-[#D4A843] hover:text-[#2C1810] underline font-medium"
+                          >
+                            Ver detalles →
+                          </button>
+                          {confirmDelete === emp.id ? (
                             <>
-                              <button
-                                onClick={() => saveEdit(emp.id)}
-                                disabled={guardando === emp.id}
-                                className="text-xs text-white bg-[#2C1810] hover:bg-[#3D2418] disabled:opacity-50 px-2 py-1 rounded font-medium active:scale-95 transition-colors"
-                              >
-                                {guardando === emp.id ? "..." : "Guardar"}
+                              <button onClick={() => eliminar(emp.id)} className="text-xs text-white bg-red-500 hover:bg-red-600 px-2 py-0.5 rounded font-medium">
+                                Confirmar
                               </button>
-                              <button onClick={() => cancelEdit(emp.id)} className="text-xs text-[#8B6347] hover:text-[#2C1810] underline">
+                              <button onClick={() => setConfirmDelete(null)} className="text-xs text-[#8B6347] underline">
                                 Cancelar
                               </button>
                             </>
                           ) : (
-                            <>
-                              {guardado === emp.id && <span className="text-xs text-green-600">✓</span>}
-                              <button onClick={() => startEdit(emp)} className="text-xs text-[#D4A843] hover:text-[#2C1810] underline font-medium">
-                                Editar
-                              </button>
-                              {confirmDelete === emp.id ? (
-                                <>
-                                  <button onClick={() => eliminar(emp.id)} className="text-xs text-white bg-red-500 hover:bg-red-600 px-2 py-0.5 rounded font-medium">
-                                    Confirmar
-                                  </button>
-                                  <button onClick={() => setConfirmDelete(null)} className="text-xs text-[#8B6347] underline">
-                                    Cancelar
-                                  </button>
-                                </>
-                              ) : (
-                                <button onClick={() => setConfirmDelete(emp.id)} className="text-xs text-red-400 hover:text-red-600 underline">
-                                  Eliminar
-                                </button>
-                              )}
-                            </>
+                            <button onClick={() => setConfirmDelete(emp.id)} className="text-xs text-red-400 hover:text-red-600 underline">
+                              Eliminar
+                            </button>
                           )}
                         </div>
                       </td>
@@ -625,6 +710,419 @@ export default function EmpleadosPage() {
           )}
         </div>
       </div>
+
+      {detalleEmpleado !== null && editando[detalleEmpleado] && (() => {
+        const emp = empleados.find((e) => e.id === detalleEmpleado);
+        const ed = editando[detalleEmpleado];
+        if (!emp) return null;
+        return (
+          <div
+            className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+            onClick={() => { cancelEdit(emp.id); setDetalleEmpleado(null); }}
+          >
+            <div
+              className="bg-white rounded-2xl max-w-4xl w-full p-6 shadow-2xl max-h-[90vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between mb-4">
+                <h2 className="font-bold text-[#2C1810] text-lg">Detalles del empleado</h2>
+                <button
+                  onClick={() => { cancelEdit(emp.id); setDetalleEmpleado(null); }}
+                  className="text-[#B89070] hover:text-[#2C1810] text-xl leading-none"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="columns-1 md:columns-2 gap-4">
+                <div className="bg-[#FAF7F2] rounded-xl p-3 break-inside-avoid mb-4">
+                  <h3 className="text-xs font-semibold text-[#8B6347] uppercase tracking-wide mb-2">Datos generales</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Campo label="Apellido">
+                      <input
+                        type="text"
+                        value={ed.apellido}
+                        onChange={(e) =>
+                          setEditando((p) => ({
+                            ...p,
+                            [emp.id]: { ...p[emp.id], apellido: e.target.value, nombre: joinNombre(e.target.value, p[emp.id].nombrePila) },
+                          }))
+                        }
+                        className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                      />
+                    </Campo>
+                    <Campo label="Nombre">
+                      <input
+                        type="text"
+                        value={ed.nombrePila}
+                        onChange={(e) =>
+                          setEditando((p) => ({
+                            ...p,
+                            [emp.id]: { ...p[emp.id], nombrePila: e.target.value, nombre: joinNombre(p[emp.id].apellido, e.target.value) },
+                          }))
+                        }
+                        className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                      />
+                    </Campo>
+                    <Campo label="Celular">
+                      <input
+                        type="text"
+                        value={ed.celular}
+                        onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], celular: e.target.value } }))}
+                        className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                      />
+                    </Campo>
+                    <Campo label="Fecha de ingreso">
+                      <input
+                        type="date"
+                        value={ed.fecha_ingreso}
+                        onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], fecha_ingreso: e.target.value } }))}
+                        className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                      />
+                    </Campo>
+                  </div>
+                  {emp.jid && (
+                    <div className="flex items-center gap-2 mt-2">
+                      <span className="text-xs bg-green-100 text-green-700 border border-green-200 px-2 py-0.5 rounded-full font-medium">
+                        WhatsApp vinculado
+                      </span>
+                      <button onClick={() => desvincular(emp.id)} className="text-xs text-red-400 hover:text-red-600 underline">
+                        Desvincular
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-[#FAF7F2] rounded-xl p-3 break-inside-avoid mb-4">
+                  <h3 className="text-xs font-semibold text-[#8B6347] uppercase tracking-wide mb-2">Datos de nómina</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Campo label="Fecha de nacimiento">
+                      <input
+                        type="date"
+                        value={ed.fecha_nacimiento}
+                        onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], fecha_nacimiento: e.target.value } }))}
+                        className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                      />
+                    </Campo>
+                    <Campo label="DNI">
+                      <input
+                        type="text"
+                        value={ed.dni}
+                        onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], dni: e.target.value } }))}
+                        className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                      />
+                    </Campo>
+                    <Campo label="Email" className="col-span-2">
+                      <input
+                        type="email"
+                        value={ed.email}
+                        onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], email: e.target.value } }))}
+                        className="w-full border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                      />
+                    </Campo>
+                    <Campo label="Dirección" className="col-span-2">
+                      <input
+                        type="text"
+                        value={ed.direccion}
+                        onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], direccion: e.target.value } }))}
+                        className="w-full border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                      />
+                    </Campo>
+                    <Campo label="Estado civil">
+                      <select
+                        value={ed.estado_civil}
+                        onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], estado_civil: e.target.value } }))}
+                        className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                      >
+                        <option value="">—</option>
+                        <option value="Soltero/a">Soltero/a</option>
+                        <option value="Casado/a">Casado/a</option>
+                        <option value="Divorciado/a">Divorciado/a</option>
+                        <option value="Viudo/a">Viudo/a</option>
+                        <option value="Unión convivencial">Unión convivencial</option>
+                      </select>
+                    </Campo>
+                    <Campo label="Nacionalidad">
+                      <input
+                        type="text"
+                        value={ed.nacionalidad}
+                        onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], nacionalidad: e.target.value } }))}
+                        className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                      />
+                    </Campo>
+                    <Campo label="Contacto de emergencia — nombre" className="col-span-2">
+                      <input
+                        type="text"
+                        value={ed.contacto_emergencia_nombre}
+                        onChange={(e) =>
+                          setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], contacto_emergencia_nombre: e.target.value } }))
+                        }
+                        className="w-full border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                      />
+                    </Campo>
+                    <Campo label="Contacto de emergencia — teléfono" className="col-span-2">
+                      <input
+                        type="text"
+                        value={ed.contacto_emergencia_telefono}
+                        onChange={(e) =>
+                          setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], contacto_emergencia_telefono: e.target.value } }))
+                        }
+                        className="w-full border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                      />
+                    </Campo>
+                  </div>
+                </div>
+
+                <div className="bg-[#FAF7F2] rounded-xl p-3 break-inside-avoid mb-4">
+                  <h3 className="text-xs font-semibold text-[#8B6347] uppercase tracking-wide mb-2">Pago blanco</h3>
+                  <div className="flex flex-wrap items-end gap-2">
+                    <Campo label="Tipo de pago">
+                      <select
+                        value={ed.tipo_pago}
+                        onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], tipo_pago: e.target.value } }))}
+                        className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                      >
+                        <option value="">—</option>
+                        <option value="mensual">Mensual</option>
+                        <option value="hora">Por hora</option>
+                        <option value="dia">Por día</option>
+                      </select>
+                    </Campo>
+                    {ed.tipo_pago === "mensual" && (
+                      <>
+                        <Campo label="Sueldo mensual">
+                          <input
+                            type="number"
+                            value={ed.sueldo_mensual}
+                            onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], sueldo_mensual: e.target.value } }))}
+                            className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-32"
+                          />
+                        </Campo>
+                        <Campo label="Valor hora (referencia)">
+                          <input
+                            type="number"
+                            value={ed.valor_hora}
+                            onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], valor_hora: e.target.value } }))}
+                            className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-36"
+                          />
+                        </Campo>
+                      </>
+                    )}
+                    {ed.tipo_pago === "hora" && (
+                      <>
+                        <Campo label="Valor hora">
+                          <input
+                            type="number"
+                            value={ed.valor_hora}
+                            onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], valor_hora: e.target.value } }))}
+                            className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-28"
+                          />
+                        </Campo>
+                        <Campo label="Sueldo estimado (tope adelantos)">
+                          <input
+                            type="number"
+                            value={ed.sueldo_estimado}
+                            onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], sueldo_estimado: e.target.value } }))}
+                            className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-44"
+                          />
+                        </Campo>
+                      </>
+                    )}
+                    {ed.tipo_pago === "dia" && (
+                      <>
+                        <Campo label="Valor día">
+                          <input
+                            type="number"
+                            value={ed.valor_dia}
+                            onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], valor_dia: e.target.value } }))}
+                            className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-28"
+                          />
+                        </Campo>
+                        <Campo label="Valor hora (extra)">
+                          <input
+                            type="number"
+                            value={ed.valor_hora}
+                            onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], valor_hora: e.target.value } }))}
+                            className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-28"
+                          />
+                        </Campo>
+                        <Campo label="Sueldo estimado (tope adelantos)">
+                          <input
+                            type="number"
+                            value={ed.sueldo_estimado}
+                            onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], sueldo_estimado: e.target.value } }))}
+                            className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-44"
+                          />
+                        </Campo>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-[#FAF7F2] rounded-xl p-3 break-inside-avoid mb-4">
+                  <label className="flex items-center gap-2 text-xs font-semibold text-[#8B6347] uppercase tracking-wide mb-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={ed.tipo_pago_informal !== ""}
+                      onChange={(e) =>
+                        setEditando((p) => ({
+                          ...p,
+                          [emp.id]: {
+                            ...p[emp.id],
+                            tipo_pago_informal: e.target.checked ? p[emp.id].tipo_pago_informal || "mensual" : "",
+                            ...(e.target.checked
+                              ? {}
+                              : { sueldo_mensual_informal: "", valor_hora_informal: "", valor_dia_informal: "" }),
+                          },
+                        }))
+                      }
+                      className="accent-[#D4A843] w-4 h-4"
+                    />
+                    Pago informal
+                  </label>
+                  {ed.tipo_pago_informal !== "" && (
+                    <div className="flex flex-wrap items-end gap-2">
+                      <Campo label="Tipo de pago (informal)">
+                        <select
+                          value={ed.tipo_pago_informal}
+                          onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], tipo_pago_informal: e.target.value } }))}
+                          className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                        >
+                          <option value="mensual">Mensual</option>
+                          <option value="hora">Por hora</option>
+                          <option value="dia">Por día</option>
+                        </select>
+                      </Campo>
+                      {ed.tipo_pago_informal === "mensual" && (
+                        <>
+                          <Campo label="Sueldo mensual (informal)">
+                            <input
+                              type="number"
+                              value={ed.sueldo_mensual_informal}
+                              onChange={(e) =>
+                                setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], sueldo_mensual_informal: e.target.value } }))
+                              }
+                              className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-36"
+                            />
+                          </Campo>
+                          <Campo label="Valor hora (referencia)">
+                            <input
+                              type="number"
+                              value={ed.valor_hora_informal}
+                              onChange={(e) =>
+                                setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], valor_hora_informal: e.target.value } }))
+                              }
+                              className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-36"
+                            />
+                          </Campo>
+                        </>
+                      )}
+                      {ed.tipo_pago_informal === "hora" && (
+                        <Campo label="Valor hora (informal)">
+                          <input
+                            type="number"
+                            value={ed.valor_hora_informal}
+                            onChange={(e) =>
+                              setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], valor_hora_informal: e.target.value } }))
+                            }
+                            className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-32"
+                          />
+                        </Campo>
+                      )}
+                      {ed.tipo_pago_informal === "dia" && (
+                        <>
+                          <Campo label="Valor día (informal)">
+                            <input
+                              type="number"
+                              value={ed.valor_dia_informal}
+                              onChange={(e) =>
+                                setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], valor_dia_informal: e.target.value } }))
+                              }
+                              className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-32"
+                            />
+                          </Campo>
+                          <Campo label="Valor hora (extra, informal)">
+                            <input
+                              type="number"
+                              value={ed.valor_hora_informal}
+                              onChange={(e) =>
+                                setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], valor_hora_informal: e.target.value } }))
+                              }
+                              className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-36"
+                            />
+                          </Campo>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-[#FAF7F2] rounded-xl p-3 break-inside-avoid mb-4">
+                  <h3 className="text-xs font-semibold text-[#8B6347] uppercase tracking-wide mb-2">Datos legales</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Campo label="CUIL">
+                      <input
+                        type="text"
+                        value={ed.cuil}
+                        onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], cuil: e.target.value } }))}
+                        className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                      />
+                    </Campo>
+                    <Campo label="Legajo">
+                      <input
+                        type="text"
+                        value={ed.legajo}
+                        onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], legajo: e.target.value } }))}
+                        className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                      />
+                    </Campo>
+                    <Campo label="Categoría laboral">
+                      <input
+                        type="text"
+                        value={ed.categoria_laboral}
+                        onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], categoria_laboral: e.target.value } }))}
+                        className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                      />
+                    </Campo>
+                    <Campo label="Banco">
+                      <input
+                        type="text"
+                        value={ed.banco}
+                        onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], banco: e.target.value } }))}
+                        className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                      />
+                    </Campo>
+                    <Campo label="CBU" className="col-span-2">
+                      <input
+                        type="text"
+                        value={ed.cbu}
+                        onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], cbu: e.target.value } }))}
+                        className="w-full border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                      />
+                    </Campo>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-2 mt-5">
+                <button
+                  onClick={async () => { await saveEdit(emp.id); setDetalleEmpleado(null); }}
+                  disabled={guardando === emp.id}
+                  className="text-sm text-white bg-[#2C1810] hover:bg-[#3D2418] disabled:opacity-50 px-4 py-2 rounded-lg font-medium active:scale-95 transition-colors"
+                >
+                  {guardando === emp.id ? "Guardando..." : "Guardar"}
+                </button>
+                <button
+                  onClick={() => { cancelEdit(emp.id); setDetalleEmpleado(null); }}
+                  className="text-sm text-[#8B6347] hover:text-[#2C1810] px-4 py-2 rounded-lg border border-[#EDE0CC] active:scale-95 transition-colors"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

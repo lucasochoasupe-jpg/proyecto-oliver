@@ -4,9 +4,7 @@ import { Fragment, useEffect, useState, useCallback } from "react";
 import PageHeader from "@/components/PageHeader";
 import EmpleadoMultiSelect from "@/components/EmpleadoMultiSelect";
 
-interface LiquidacionEmpleado {
-  empleado_id: number;
-  nombre: string;
+interface ParteDetalle {
   tipo_pago: "mensual" | "hora" | "dia" | null;
   sueldo_mensual: number | null;
   valor_hora: number | null;
@@ -25,7 +23,32 @@ interface LiquidacionEmpleado {
   dias_trabajados: number | null;
   horas_extra: number | null;
   total_por_horas: number | null;
+  total: number;
+}
+
+interface AportesLegales {
+  presentismo: number;
+  sueldo_bruto: number;
+  aporte_jubilacion: number;
+  aporte_ley19032: number;
+  aporte_obra_social: number;
+  aporte_sindical: number;
+  total_aportes_empleado: number;
+  costo_art: number;
+  costo_jubilacion_patronal: number;
+  costo_obra_social_patronal: number;
+  costo_seguro_vida: number;
+  costo_empleador_total: number;
+  costo_total_empleador: number;
+}
+
+interface LiquidacionEmpleado extends Omit<ParteDetalle, "total"> {
+  empleado_id: number;
+  nombre: string;
   adelantos: number;
+  legal: AportesLegales | null;
+  total_blanco: number;
+  informal: ParteDetalle | null;
   total: number;
   advertencias: string[];
 }
@@ -43,13 +66,13 @@ function formatMoneda(n: number) {
 // Compara el total (sueldo fijo mensual, o jornal por día) contra lo que
 // cobraría estrictamente por horas trabajadas × valor hora — para detectar de
 // un vistazo si el sueldo fijo está pagando de más o de menos.
-function ComparacionPorHoras({ f }: { f: LiquidacionEmpleado }) {
-  if (f.total_por_horas === null) return null;
-  const diff = f.total - f.total_por_horas;
+function ComparacionPorHoras({ total, totalPorHoras }: { total: number; totalPorHoras: number | null }) {
+  if (totalPorHoras === null) return null;
+  const diff = total - totalPorHoras;
   const igual = Math.abs(diff) <= 1;
   return (
     <p className={igual ? "" : diff > 0 ? "text-red-600" : "text-blue-600"}>
-      Según horas trabajadas × valor hora: {formatMoneda(f.total_por_horas)}
+      Según horas trabajadas × valor hora: {formatMoneda(totalPorHoras)}
       {!igual && ` — cobra ${formatMoneda(Math.abs(diff))} ${diff > 0 ? "de más" : "de menos"} que eso`}
     </p>
   );
@@ -59,6 +82,102 @@ function formatHoras(h: number) {
   const horas = Math.floor(h);
   const minutos = Math.round((h - horas) * 60);
   return `${horas}h ${minutos.toString().padStart(2, "0")}m`;
+}
+
+// Desglose de una parte (blanca o informal) — mismo bloque de texto para ambas,
+// cada una con su propio tipo de pago y valores.
+function DetalleParte({ p }: { p: ParteDetalle }) {
+  return (
+    <>
+      {p.tipo_pago === "hora" && (
+        <p>Horas trabajadas en el período: {p.horas_trabajadas !== null ? formatHoras(p.horas_trabajadas) : "—"}</p>
+      )}
+      {p.tipo_pago === "dia" && (
+        <>
+          <p>Horas trabajadas en el período: {p.horas_trabajadas !== null ? formatHoras(p.horas_trabajadas) : "—"}</p>
+          <ComparacionPorHoras total={p.total} totalPorHoras={p.total_por_horas} />
+          {p.dias_trabajados !== null ? (
+            <>
+              <p>
+                Días trabajados (con jornal): {p.dias_trabajados} × {p.valor_dia ? formatMoneda(p.valor_dia) : "—"}
+              </p>
+              {p.horas_extra !== null && p.horas_extra > 0 && (
+                <p>
+                  Horas extra (por encima del turno pactado): {formatHoras(p.horas_extra)}
+                  {p.valor_hora && ` (+ ${formatMoneda(p.horas_extra * p.valor_hora)})`}
+                </p>
+              )}
+              <p>
+                Ausencias sin aviso: {p.dias_ausencia} día{p.dias_ausencia === 1 ? "" : "s"} — no genera jornal ese día
+              </p>
+              {p.dias_ausencia_justificada > 0 && (
+                <p className="text-emerald-700">
+                  ✓ Ausencias justificadas (avisadas): {p.dias_ausencia_justificada} día
+                  {p.dias_ausencia_justificada === 1 ? "" : "s"}
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="text-amber-700">
+              ⚠ Sin horario cargado — se pagó directo por hora trabajada (sin jornal ni horas extra).
+            </p>
+          )}
+        </>
+      )}
+      {p.tipo_pago === "mensual" && (
+        <>
+          <p>Horas pactadas en el período: {p.horas_pactadas !== null ? formatHoras(p.horas_pactadas) : "—"}</p>
+          <p>Horas trabajadas (fichadas) en el período: {p.horas_trabajadas !== null ? formatHoras(p.horas_trabajadas) : "—"}</p>
+          <p>
+            Valor hora equivalente (sueldo ÷ horas pactadas):{" "}
+            {p.valor_hora_equivalente !== null ? formatMoneda(p.valor_hora_equivalente) : "—"}
+          </p>
+          <ComparacionPorHoras total={p.total} totalPorHoras={p.total_por_horas} />
+          <p>
+            Tardanzas / salidas anticipadas: {p.minutos_perdidos} min
+            {p.descuento_tardanza > 0 && ` (- ${formatMoneda(p.descuento_tardanza)})`}
+          </p>
+          <p>
+            Ausencias sin aviso: {p.dias_ausencia} día{p.dias_ausencia === 1 ? "" : "s"}
+            {p.horas_ausencia > 0 && ` (${formatHoras(p.horas_ausencia)})`}
+            {p.descuento_ausencia > 0 && ` (- ${formatMoneda(p.descuento_ausencia)})`}
+          </p>
+          {p.dias_ausencia_justificada > 0 && (
+            <p className="text-emerald-700">
+              ✓ Ausencias justificadas (avisadas): {p.dias_ausencia_justificada} día
+              {p.dias_ausencia_justificada === 1 ? "" : "s"}
+              {p.horas_ausencia_justificada > 0 && ` (${formatHoras(p.horas_ausencia_justificada)})`} — no se descuentan
+            </p>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+// Presentismo + aportes legales + costo empleador de la parte blanca — solo
+// existe cuando el empleado tiene tipo_pago configurado (ver `legal` en
+// LiquidacionEmpleado).
+function DetalleLegal({ legal }: { legal: AportesLegales }) {
+  return (
+    <>
+      {legal.presentismo > 0 && <p>Presentismo: + {formatMoneda(legal.presentismo)}</p>}
+      <p>Sueldo bruto: {formatMoneda(legal.sueldo_bruto)}</p>
+      <p>
+        Aportes del empleado: jubilación {formatMoneda(legal.aporte_jubilacion)} · ley 19032{" "}
+        {formatMoneda(legal.aporte_ley19032)} · obra social {formatMoneda(legal.aporte_obra_social)}
+        {legal.aporte_sindical > 0 && ` · sindical ${formatMoneda(legal.aporte_sindical)}`} — total -{" "}
+        {formatMoneda(legal.total_aportes_empleado)}
+      </p>
+      <p className="text-[#8B6347]">
+        Costo empleador (no se descuenta del sueldo): ART {formatMoneda(legal.costo_art)} · jubilación patronal{" "}
+        {formatMoneda(legal.costo_jubilacion_patronal)} · obra social patronal{" "}
+        {formatMoneda(legal.costo_obra_social_patronal)}
+        {legal.costo_seguro_vida > 0 && ` · seguro de vida ${formatMoneda(legal.costo_seguro_vida)}`} — costo total
+        empleador {formatMoneda(legal.costo_total_empleador)}
+      </p>
+    </>
+  );
 }
 
 export default function LiquidacionPage() {
@@ -93,6 +212,14 @@ export default function LiquidacionPage() {
     if (hasta) params.set("hasta", hasta);
     if (nombresFiltro.length > 0) params.set("nombres", nombresFiltro.join(","));
     window.location.href = `/api/liquidacion/export?${params.toString()}`;
+  }
+
+  function descargarRecibo(empleadoId: number) {
+    const params = new URLSearchParams();
+    params.set("empleadoId", String(empleadoId));
+    if (desde) params.set("desde", desde);
+    if (hasta) params.set("hasta", hasta);
+    window.location.href = `/api/liquidacion/recibo?${params.toString()}`;
   }
 
   const filas = data?.filas ?? [];
@@ -207,7 +334,13 @@ export default function LiquidacionPage() {
               </thead>
               <tbody>
                 {filas.map((f, i) => {
-                  const descuentos = f.descuento_tardanza + f.descuento_ausencia + f.adelantos;
+                  const descuentos =
+                    f.descuento_tardanza +
+                    f.descuento_ausencia +
+                    f.adelantos +
+                    (f.legal?.total_aportes_empleado ?? 0) +
+                    (f.informal?.descuento_tardanza ?? 0) +
+                    (f.informal?.descuento_ausencia ?? 0);
                   return (
                     <Fragment key={f.empleado_id}>
                       <tr
@@ -256,8 +389,28 @@ export default function LiquidacionPage() {
                         <td className="px-4 py-3 font-mono text-red-500" data-label="Descuentos">
                           {descuentos > 0 ? `- ${formatMoneda(descuentos)}` : "—"}
                         </td>
-                        <td className="px-4 py-3 font-mono text-[#2C1810] font-semibold" data-label="Total">{formatMoneda(f.total)}</td>
-                        <td className="px-4 py-3 text-[#B89070] text-xs">{expandido === f.empleado_id ? "▲ ocultar" : "▼ detalle"}</td>
+                        <td className="px-4 py-3 font-mono text-[#2C1810] font-semibold" data-label="Total">
+                          {formatMoneda(f.total)}
+                          {f.informal && (
+                            <div className="text-[10px] font-normal text-[#8B6347] mt-0.5">
+                              Blanco {formatMoneda(f.total_blanco)} · Informal {formatMoneda(f.informal.total)}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-[#B89070] text-xs whitespace-nowrap">
+                          {f.tipo_pago !== null && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                descargarRecibo(f.empleado_id);
+                              }}
+                              className="mr-3 text-[#8B6347] hover:text-[#2C1810] underline"
+                            >
+                              Recibo (PDF)
+                            </button>
+                          )}
+                          {expandido === f.empleado_id ? "▲ ocultar" : "▼ detalle"}
+                        </td>
                       </tr>
                       {expandido === f.empleado_id && (
                         <tr key={`${f.empleado_id}-detalle`}>
@@ -269,66 +422,17 @@ export default function LiquidacionPage() {
                               {f.adelantos > 0 && (
                                 <p className="text-red-600">Adelantos en el período: - {formatMoneda(f.adelantos)}</p>
                               )}
-                              {f.tipo_pago === "hora" && (
-                                <p>Horas trabajadas en el período: {f.horas_trabajadas !== null ? formatHoras(f.horas_trabajadas) : "—"}</p>
-                              )}
-                              {f.tipo_pago === "dia" && (
+                              {f.informal && <p className="font-semibold text-[#2C1810]">Blanco</p>}
+                              <DetalleParte p={{ ...f, total: f.total_blanco }} />
+                              {f.legal && <DetalleLegal legal={f.legal} />}
+                              {f.informal && (
                                 <>
-                                  <p>Horas trabajadas en el período: {f.horas_trabajadas !== null ? formatHoras(f.horas_trabajadas) : "—"}</p>
-                                  <ComparacionPorHoras f={f} />
-                                  {f.dias_trabajados !== null ? (
-                                    <>
-                                      <p>
-                                        Días trabajados (con jornal): {f.dias_trabajados} × {f.valor_dia ? formatMoneda(f.valor_dia) : "—"}
-                                      </p>
-                                      {f.horas_extra !== null && f.horas_extra > 0 && (
-                                        <p>
-                                          Horas extra (por encima del turno pactado): {formatHoras(f.horas_extra)}
-                                          {f.valor_hora && ` (+ ${formatMoneda(f.horas_extra * f.valor_hora)})`}
-                                        </p>
-                                      )}
-                                      <p>
-                                        Ausencias sin aviso: {f.dias_ausencia} día{f.dias_ausencia === 1 ? "" : "s"} — no genera jornal ese día
-                                      </p>
-                                      {f.dias_ausencia_justificada > 0 && (
-                                        <p className="text-emerald-700">
-                                          ✓ Ausencias justificadas (avisadas): {f.dias_ausencia_justificada} día
-                                          {f.dias_ausencia_justificada === 1 ? "" : "s"}
-                                        </p>
-                                      )}
-                                    </>
-                                  ) : (
-                                    <p className="text-amber-700">
-                                      ⚠ Sin horario cargado — se pagó directo por hora trabajada (sin jornal ni horas extra).
-                                    </p>
-                                  )}
-                                </>
-                              )}
-                              {f.tipo_pago === "mensual" && (
-                                <>
-                                  <p>Horas pactadas en el período: {f.horas_pactadas !== null ? formatHoras(f.horas_pactadas) : "—"}</p>
-                                  <p>Horas trabajadas (fichadas) en el período: {f.horas_trabajadas !== null ? formatHoras(f.horas_trabajadas) : "—"}</p>
-                                  <p>
-                                    Valor hora equivalente (sueldo ÷ horas pactadas):{" "}
-                                    {f.valor_hora_equivalente !== null ? formatMoneda(f.valor_hora_equivalente) : "—"}
+                                  <p className="font-semibold text-[#2C1810] pt-2 border-t border-[#EDE0CC] mt-2">
+                                    Informal —{" "}
+                                    {f.informal.tipo_pago === "mensual" ? "Mensual" : f.informal.tipo_pago === "hora" ? "Por hora" : "Por día"}
                                   </p>
-                                  <ComparacionPorHoras f={f} />
-                                  <p>
-                                    Tardanzas / salidas anticipadas: {f.minutos_perdidos} min
-                                    {f.descuento_tardanza > 0 && ` (- ${formatMoneda(f.descuento_tardanza)})`}
-                                  </p>
-                                  <p>
-                                    Ausencias sin aviso: {f.dias_ausencia} día{f.dias_ausencia === 1 ? "" : "s"}
-                                    {f.horas_ausencia > 0 && ` (${formatHoras(f.horas_ausencia)})`}
-                                    {f.descuento_ausencia > 0 && ` (- ${formatMoneda(f.descuento_ausencia)})`}
-                                  </p>
-                                  {f.dias_ausencia_justificada > 0 && (
-                                    <p className="text-emerald-700">
-                                      ✓ Ausencias justificadas (avisadas): {f.dias_ausencia_justificada} día
-                                      {f.dias_ausencia_justificada === 1 ? "" : "s"}
-                                      {f.horas_ausencia_justificada > 0 && ` (${formatHoras(f.horas_ausencia_justificada)})`} — no se descuentan
-                                    </p>
-                                  )}
+                                  <DetalleParte p={f.informal} />
+                                  <p className="font-medium">Total informal: {formatMoneda(f.informal.total)}</p>
                                 </>
                               )}
                             </div>

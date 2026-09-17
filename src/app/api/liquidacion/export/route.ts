@@ -37,6 +37,17 @@ export async function GET(req: NextRequest) {
     { header: "Horas extra", key: "horas_extra", width: 14 },
     { header: "Según horas trabajadas", key: "total_por_horas", width: 20 },
     { header: "Adelantos", key: "adelantos", width: 16 },
+    { header: "Presentismo", key: "presentismo", width: 16 },
+    { header: "Sueldo bruto", key: "sueldo_bruto", width: 16 },
+    { header: "Aporte jubilación", key: "aporte_jubilacion", width: 16 },
+    { header: "Aporte ley 19032", key: "aporte_ley19032", width: 16 },
+    { header: "Aporte obra social", key: "aporte_obra_social", width: 16 },
+    { header: "Aporte sindical", key: "aporte_sindical", width: 16 },
+    { header: "Costo empleador total", key: "costo_empleador_total", width: 18 },
+    { header: "Total blanco", key: "total_blanco", width: 16 },
+    { header: "Tipo de pago (informal)", key: "tipo_pago_informal", width: 16 },
+    { header: "Base (informal)", key: "base_informal", width: 14 },
+    { header: "Total informal", key: "total_informal", width: 16 },
     { header: "Total", key: "total", width: 16 },
     { header: "Alertas", key: "advertencias", width: 30 },
   ];
@@ -67,11 +78,52 @@ export async function GET(req: NextRequest) {
       horas_extra: f.horas_extra !== null ? Number(f.horas_extra.toFixed(2)) : "",
       total_por_horas: f.total_por_horas !== null ? Number(f.total_por_horas.toFixed(2)) : "",
       adelantos: f.adelantos > 0 ? Number(f.adelantos.toFixed(2)) : "",
+      presentismo: f.legal ? Number(f.legal.presentismo.toFixed(2)) : "",
+      sueldo_bruto: f.legal ? Number(f.legal.sueldo_bruto.toFixed(2)) : "",
+      aporte_jubilacion: f.legal ? Number(f.legal.aporte_jubilacion.toFixed(2)) : "",
+      aporte_ley19032: f.legal ? Number(f.legal.aporte_ley19032.toFixed(2)) : "",
+      aporte_obra_social: f.legal ? Number(f.legal.aporte_obra_social.toFixed(2)) : "",
+      aporte_sindical: f.legal ? Number(f.legal.aporte_sindical.toFixed(2)) : "",
+      costo_empleador_total: f.legal ? Number(f.legal.costo_empleador_total.toFixed(2)) : "",
+      total_blanco: Number(f.total_blanco.toFixed(2)),
+      tipo_pago_informal: f.informal
+        ? f.informal.tipo_pago === "mensual"
+          ? "Mensual"
+          : f.informal.tipo_pago === "hora"
+          ? "Por hora"
+          : "Por día"
+        : "",
+      base_informal: f.informal
+        ? f.informal.tipo_pago === "mensual"
+          ? f.informal.sueldo_mensual ?? ""
+          : f.informal.tipo_pago === "hora"
+          ? f.informal.valor_hora ?? ""
+          : f.informal.valor_dia ?? ""
+        : "",
+      total_informal: f.informal ? Number(f.informal.total.toFixed(2)) : "",
       total: Number(f.total.toFixed(2)),
       advertencias: f.advertencias.join(" · "),
     });
     for (const key of ["horas_trabajadas", "horas_pactadas", "horas_extra"]) row.getCell(key).numFmt = "0.00";
-    for (const key of ["base", "descuento_tardanza", "descuento_ausencia", "total_por_horas", "adelantos", "total"]) row.getCell(key).numFmt = "#,##0.00";
+    for (const key of [
+      "base",
+      "descuento_tardanza",
+      "descuento_ausencia",
+      "total_por_horas",
+      "adelantos",
+      "presentismo",
+      "sueldo_bruto",
+      "aporte_jubilacion",
+      "aporte_ley19032",
+      "aporte_obra_social",
+      "aporte_sindical",
+      "costo_empleador_total",
+      "total_blanco",
+      "base_informal",
+      "total_informal",
+      "total",
+    ])
+      row.getCell(key).numFmt = "#,##0.00";
     row.eachCell((cell) => {
       cell.alignment = { vertical: "middle" };
       cell.fill = zebraFill(i);
