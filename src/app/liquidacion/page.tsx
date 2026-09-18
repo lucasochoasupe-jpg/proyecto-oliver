@@ -46,6 +46,8 @@ interface LiquidacionEmpleado extends Omit<ParteDetalle, "total"> {
   empleado_id: number;
   nombre: string;
   adelantos: number;
+  adelantos_blanco: number;
+  adelantos_informal: number;
   legal: AportesLegales | null;
   total_blanco: number;
   informal: ParteDetalle | null;
@@ -180,13 +182,85 @@ function DetalleLegal({ legal }: { legal: AportesLegales }) {
   );
 }
 
+// ── Aguinaldo ─────────────────────────────────────────────────────────────
+
+interface AguinaldoParte {
+  mejor_remuneracion: number;
+  mes_mejor_remuneracion: string | null;
+  meses_computados: number;
+}
+
+interface AguinaldoEmpleado {
+  empleado_id: number;
+  nombre: string;
+  blanco: AguinaldoParte | null;
+  aguinaldo_blanco: number;
+  legal: AportesLegales | null;
+  neto_blanco: number;
+  informal: AguinaldoParte | null;
+  aguinaldo_informal: number;
+  total_neto: number;
+  advertencias: string[];
+}
+
+interface AguinaldoApiResponse {
+  anio: number;
+  numero: 1 | 2;
+  desde: string;
+  hasta: string;
+  filas: AguinaldoEmpleado[];
+}
+
+function mesLabel(iso: string | null): string {
+  if (!iso) return "—";
+  const [y, m] = iso.split("-");
+  const nombres = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+  return `${nombres[Number(m) - 1]} ${y}`;
+}
+
 export default function LiquidacionPage() {
+  const [modo, setModo] = useState<"mensual" | "aguinaldo">("mensual");
+
+  return (
+    <div className="min-h-screen bg-[#FAF7F2]">
+      <PageHeader subtitle="Liquidación de sueldos" />
+
+      <div className="max-w-7xl mx-auto px-4 pt-6">
+        <div className="inline-flex rounded-full border border-[#EDE0CC] bg-white p-1">
+          <button
+            onClick={() => setModo("mensual")}
+            className={`text-xs px-4 py-1.5 rounded-full font-medium transition-colors ${
+              modo === "mensual" ? "bg-[#2C1810] text-white" : "text-[#8B6347] hover:text-[#2C1810]"
+            }`}
+          >
+            Mensual
+          </button>
+          <button
+            onClick={() => setModo("aguinaldo")}
+            className={`text-xs px-4 py-1.5 rounded-full font-medium transition-colors ${
+              modo === "aguinaldo" ? "bg-[#2C1810] text-white" : "text-[#8B6347] hover:text-[#2C1810]"
+            }`}
+          >
+            Aguinaldo (SAC)
+          </button>
+        </div>
+      </div>
+
+      {modo === "mensual" ? <LiquidacionMensual /> : <LiquidacionAguinaldo />}
+    </div>
+  );
+}
+
+function LiquidacionMensual() {
   const [data, setData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [desde, setDesde] = useState("");
   const [hasta, setHasta] = useState("");
   const [nombresFiltro, setNombresFiltro] = useState<string[]>([]);
   const [expandido, setExpandido] = useState<number | null>(null);
+  const [modalRecibos, setModalRecibos] = useState(false);
+  const [seleccionRecibos, setSeleccionRecibos] = useState<Set<string>>(new Set());
+  const [busquedaRecibos, setBusquedaRecibos] = useState("");
 
   const fetchData = useCallback(async () => {
     const params = new URLSearchParams();
@@ -214,6 +288,46 @@ export default function LiquidacionPage() {
     window.location.href = `/api/liquidacion/export?${params.toString()}`;
   }
 
+  function abrirModalRecibos() {
+    setSeleccionRecibos(new Set(filas.map((f) => f.nombre)));
+    setBusquedaRecibos("");
+    setModalRecibos(true);
+  }
+
+  function toggleRecibo(nombre: string) {
+    setSeleccionRecibos((prev) => {
+      const next = new Set(prev);
+      if (next.has(nombre)) next.delete(nombre);
+      else next.add(nombre);
+      return next;
+    });
+  }
+
+  // Selecciona/deselecciona solo los empleados visibles con la búsqueda
+  // actual, no la lista completa — así el botón sirve para elegir "todos los
+  // que coinciden con la búsqueda" sin perder la selección de los demás.
+  function toggleTodosRecibos(visibles: LiquidacionEmpleado[]) {
+    const todosVisiblesSeleccionados = visibles.every((f) => seleccionRecibos.has(f.nombre));
+    setSeleccionRecibos((prev) => {
+      const next = new Set(prev);
+      for (const f of visibles) {
+        if (todosVisiblesSeleccionados) next.delete(f.nombre);
+        else next.add(f.nombre);
+      }
+      return next;
+    });
+  }
+
+  function descargarRecibosSeleccionados() {
+    if (seleccionRecibos.size === 0) return;
+    const params = new URLSearchParams();
+    if (desde) params.set("desde", desde);
+    if (hasta) params.set("hasta", hasta);
+    params.set("nombres", Array.from(seleccionRecibos).join(","));
+    window.location.href = `/api/liquidacion/recibos-zip?${params.toString()}`;
+    setModalRecibos(false);
+  }
+
   function descargarRecibo(empleadoId: number) {
     const params = new URLSearchParams();
     params.set("empleadoId", String(empleadoId));
@@ -227,226 +341,733 @@ export default function LiquidacionPage() {
   const conAlertas = filas.filter((f) => f.advertencias.length > 0).length;
 
   return (
-    <div className="min-h-screen bg-[#FAF7F2]">
-      <PageHeader subtitle="Liquidación de sueldos" />
+    <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h1 className="text-xl font-bold text-[#2C1810]">Liquidación de sueldos</h1>
+          <p className="text-sm text-[#8B6347] mt-0.5">
+            Cálculo interno aproximado a partir de asistencia y horarios — no reemplaza el recibo de sueldo.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={fetchData}
+            className="text-xs text-[#8B6347] hover:text-[#2C1810] border border-[#D4A843] hover:border-[#2C1810] px-3 py-1 rounded-full active:scale-95 transition-colors"
+          >
+            ↻ Actualizar
+          </button>
+          <button
+            onClick={exportarExcel}
+            disabled={filas.length === 0}
+            className="text-xs text-white bg-[#2C1810] hover:bg-[#3D2418] disabled:opacity-40 disabled:cursor-not-allowed px-3 py-1 rounded-full transition-colors font-medium"
+          >
+            ↓ Exportar Excel
+          </button>
+          <button
+            onClick={abrirModalRecibos}
+            disabled={filas.length === 0}
+            title="Elegí a quién generarle el recibo y descargá un .zip"
+            className="text-xs text-white bg-[#2C1810] hover:bg-[#3D2418] disabled:opacity-40 disabled:cursor-not-allowed px-3 py-1 rounded-full transition-colors font-medium"
+          >
+            ↓ Recibos masivos
+          </button>
+        </div>
+      </div>
 
-      <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <div>
-            <h1 className="text-xl font-bold text-[#2C1810]">Liquidación de sueldos</h1>
-            <p className="text-sm text-[#8B6347] mt-0.5">
-              Cálculo interno aproximado a partir de asistencia y horarios — no reemplaza el recibo de sueldo.
-            </p>
+      {data && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="bg-white rounded-xl border border-[#EDE0CC] p-4">
+            <p className="text-xs text-[#8B6347] uppercase tracking-wide font-medium">Total del período</p>
+            <p className="text-3xl font-bold text-[#2C1810] mt-1">{formatMoneda(totalPeriodo)}</p>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={fetchData}
-              className="text-xs text-[#8B6347] hover:text-[#2C1810] border border-[#D4A843] hover:border-[#2C1810] px-3 py-1 rounded-full active:scale-95 transition-colors"
-            >
-              ↻ Actualizar
-            </button>
-            <button
-              onClick={exportarExcel}
-              disabled={filas.length === 0}
-              className="text-xs text-white bg-[#2C1810] hover:bg-[#3D2418] disabled:opacity-40 disabled:cursor-not-allowed px-3 py-1 rounded-full transition-colors font-medium"
-            >
-              ↓ Exportar Excel
-            </button>
+          <div className="bg-white rounded-xl border border-[#EDE0CC] p-4">
+            <p className="text-xs text-[#8B6347] uppercase tracking-wide font-medium">Empleados</p>
+            <p className="text-3xl font-bold text-[#2C1810] mt-1">{filas.length}</p>
+          </div>
+          <div className="bg-white rounded-xl border border-[#EDE0CC] p-4 col-span-2">
+            <p className="text-xs text-[#8B6347] uppercase tracking-wide font-medium mb-1">Rango</p>
+            <p className="text-sm text-[#2C1810] mt-1">{data.desde} → {data.hasta}</p>
+            {conAlertas > 0 && (
+              <p className="text-xs text-amber-600 mt-1">
+                ⚠ {conAlertas} empleado{conAlertas > 1 ? "s" : ""} con datos incompletos (ver detalle)
+              </p>
+            )}
           </div>
         </div>
+      )}
 
-        {data && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-white rounded-xl border border-[#EDE0CC] p-4">
-              <p className="text-xs text-[#8B6347] uppercase tracking-wide font-medium">Total del período</p>
-              <p className="text-3xl font-bold text-[#2C1810] mt-1">{formatMoneda(totalPeriodo)}</p>
-            </div>
-            <div className="bg-white rounded-xl border border-[#EDE0CC] p-4">
-              <p className="text-xs text-[#8B6347] uppercase tracking-wide font-medium">Empleados</p>
-              <p className="text-3xl font-bold text-[#2C1810] mt-1">{filas.length}</p>
-            </div>
-            <div className="bg-white rounded-xl border border-[#EDE0CC] p-4 col-span-2">
-              <p className="text-xs text-[#8B6347] uppercase tracking-wide font-medium mb-1">Rango</p>
-              <p className="text-sm text-[#2C1810] mt-1">{data.desde} → {data.hasta}</p>
-              {conAlertas > 0 && (
-                <p className="text-xs text-amber-600 mt-1">
-                  ⚠ {conAlertas} empleado{conAlertas > 1 ? "s" : ""} con datos incompletos (ver detalle)
-                </p>
-              )}
-            </div>
+      <div className="bg-white rounded-xl border border-[#EDE0CC] p-4 flex flex-wrap gap-3 items-end">
+        <EmpleadoMultiSelect value={nombresFiltro} onChange={setNombresFiltro} />
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-[#8B6347] font-medium">Desde</label>
+          <input
+            type="date"
+            value={desde}
+            onChange={(e) => setDesde(e.target.value)}
+            className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-[#8B6347] font-medium">Hasta</label>
+          <input
+            type="date"
+            value={hasta}
+            onChange={(e) => setHasta(e.target.value)}
+            className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+          />
+        </div>
+        {nombresFiltro.length > 0 && (
+          <button
+            onClick={() => setNombresFiltro([])}
+            className="text-xs text-[#8B6347] hover:text-red-500 underline"
+          >
+            Limpiar filtros
+          </button>
+        )}
+      </div>
+
+      <div className="bg-white rounded-xl border border-[#EDE0CC] overflow-hidden">
+        {loading && (
+          <div className="flex justify-center py-16">
+            <div className="w-8 h-8 border-2 border-[#EDE0CC] border-t-[#D4A843] rounded-full animate-spin" />
           </div>
         )}
 
-        <div className="bg-white rounded-xl border border-[#EDE0CC] p-4 flex flex-wrap gap-3 items-end">
-          <EmpleadoMultiSelect value={nombresFiltro} onChange={setNombresFiltro} />
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#8B6347] font-medium">Desde</label>
-            <input
-              type="date"
-              value={desde}
-              onChange={(e) => setDesde(e.target.value)}
-              className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
-            />
+        {!loading && filas.length === 0 && (
+          <div className="text-center py-16 text-[#8B6347] text-sm">
+            Ningún empleado activo en el rango seleccionado.
           </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#8B6347] font-medium">Hasta</label>
-            <input
-              type="date"
-              value={hasta}
-              onChange={(e) => setHasta(e.target.value)}
-              className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
-            />
-          </div>
-          {nombresFiltro.length > 0 && (
-            <button
-              onClick={() => setNombresFiltro([])}
-              className="text-xs text-[#8B6347] hover:text-red-500 underline"
-            >
-              Limpiar filtros
-            </button>
-          )}
-        </div>
+        )}
 
-        <div className="bg-white rounded-xl border border-[#EDE0CC] overflow-hidden">
-          {loading && (
-            <div className="flex justify-center py-16">
-              <div className="w-8 h-8 border-2 border-[#EDE0CC] border-t-[#D4A843] rounded-full animate-spin" />
-            </div>
-          )}
-
-          {!loading && filas.length === 0 && (
-            <div className="text-center py-16 text-[#8B6347] text-sm">
-              Ningún empleado activo en el rango seleccionado.
-            </div>
-          )}
-
-          {!loading && filas.length > 0 && (
-            <table className="w-full text-sm responsive-table">
-              <thead>
-                <tr className="border-b border-[#EDE0CC] bg-[#FAF7F2]">
-                  <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Empleado</th>
-                  <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Tipo</th>
-                  <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Base</th>
-                  <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Descuentos</th>
-                  <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Total</th>
-                  <th className="px-4 py-3"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {filas.map((f, i) => {
-                  const descuentos =
-                    f.descuento_tardanza +
-                    f.descuento_ausencia +
-                    f.adelantos +
-                    (f.legal?.total_aportes_empleado ?? 0) +
-                    (f.informal?.descuento_tardanza ?? 0) +
-                    (f.informal?.descuento_ausencia ?? 0);
-                  return (
-                    <Fragment key={f.empleado_id}>
-                      <tr
-                        onClick={() => setExpandido(expandido === f.empleado_id ? null : f.empleado_id)}
-                        className={`border-b border-[#EDE0CC] hover:bg-[#FAF7F2] transition-colors cursor-pointer ${i % 2 === 0 ? "" : "bg-[#FDFAF6]"}`}
-                      >
-                        <td className="px-4 py-3 font-medium text-[#2C1810]" data-label="Empleado">
-                          {f.nombre}
-                          {f.advertencias.length > 0 && (
-                            <span className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
-                              ⚠ {f.advertencias.length}
-                            </span>
-                          )}
-                          {f.horas_en_curso && (
-                            <span className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-200">
-                              ⏱ en curso
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-[#5C3D2E]" data-label="Tipo">
-                          {f.tipo_pago === "mensual"
-                            ? "Mensual"
-                            : f.tipo_pago === "hora"
-                            ? "Por hora"
-                            : f.tipo_pago === "dia"
-                            ? "Por día"
-                            : "—"}
-                        </td>
-                        <td className="px-4 py-3 font-mono text-[#8B6347]" data-label="Base">
-                          {f.tipo_pago === "mensual"
-                            ? f.sueldo_mensual !== null
-                              ? formatMoneda(f.sueldo_mensual)
-                              : "—"
-                            : f.tipo_pago === "hora"
-                            ? f.horas_trabajadas !== null
-                              ? `${formatHoras(f.horas_trabajadas)} × ${f.valor_hora ? formatMoneda(f.valor_hora) : "—"}`
-                              : "—"
-                            : f.tipo_pago === "dia"
-                            ? f.dias_trabajados !== null
-                              ? `${f.dias_trabajados} día${f.dias_trabajados === 1 ? "" : "s"} × ${f.valor_dia ? formatMoneda(f.valor_dia) : "—"}`
-                              : f.horas_trabajadas !== null
-                              ? `${formatHoras(f.horas_trabajadas)} × ${f.valor_hora ? formatMoneda(f.valor_hora) : "—"}`
-                              : "—"
-                            : "—"}
-                        </td>
-                        <td className="px-4 py-3 font-mono text-red-500" data-label="Descuentos">
-                          {descuentos > 0 ? `- ${formatMoneda(descuentos)}` : "—"}
-                        </td>
-                        <td className="px-4 py-3 font-mono text-[#2C1810] font-semibold" data-label="Total">
-                          {formatMoneda(f.total)}
-                          {f.informal && (
-                            <div className="text-[10px] font-normal text-[#8B6347] mt-0.5">
-                              Blanco {formatMoneda(f.total_blanco)} · Informal {formatMoneda(f.informal.total)}
-                            </div>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-[#B89070] text-xs whitespace-nowrap">
-                          {f.tipo_pago !== null && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                descargarRecibo(f.empleado_id);
-                              }}
-                              className="mr-3 text-[#8B6347] hover:text-[#2C1810] underline"
-                            >
-                              Recibo (PDF)
-                            </button>
-                          )}
-                          {expandido === f.empleado_id ? "▲ ocultar" : "▼ detalle"}
+        {!loading && filas.length > 0 && (
+          <table className="w-full text-sm responsive-table">
+            <thead>
+              <tr className="border-b border-[#EDE0CC] bg-[#FAF7F2]">
+                <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Empleado</th>
+                <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Tipo</th>
+                <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Base</th>
+                <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Descuentos</th>
+                <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Total</th>
+                <th className="px-4 py-3"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filas.map((f, i) => {
+                const descuentos =
+                  f.descuento_tardanza +
+                  f.descuento_ausencia +
+                  f.adelantos +
+                  (f.legal?.total_aportes_empleado ?? 0) +
+                  (f.informal?.descuento_tardanza ?? 0) +
+                  (f.informal?.descuento_ausencia ?? 0);
+                return (
+                  <Fragment key={f.empleado_id}>
+                    <tr
+                      onClick={() => setExpandido(expandido === f.empleado_id ? null : f.empleado_id)}
+                      className={`border-b border-[#EDE0CC] hover:bg-[#FAF7F2] transition-colors cursor-pointer ${i % 2 === 0 ? "" : "bg-[#FDFAF6]"}`}
+                    >
+                      <td className="px-4 py-3 font-medium text-[#2C1810]" data-label="Empleado">
+                        {f.nombre}
+                        {f.advertencias.length > 0 && (
+                          <span className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
+                            ⚠ {f.advertencias.length}
+                          </span>
+                        )}
+                        {f.horas_en_curso && (
+                          <span className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-200">
+                            ⏱ en curso
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-[#5C3D2E]" data-label="Tipo">
+                        {f.tipo_pago === "mensual"
+                          ? "Mensual"
+                          : f.tipo_pago === "hora"
+                          ? "Por hora"
+                          : f.tipo_pago === "dia"
+                          ? "Por día"
+                          : "—"}
+                      </td>
+                      <td className="px-4 py-3 font-mono text-[#8B6347]" data-label="Base">
+                        {f.tipo_pago === "mensual"
+                          ? f.sueldo_mensual !== null
+                            ? formatMoneda(f.sueldo_mensual)
+                            : "—"
+                          : f.tipo_pago === "hora"
+                          ? f.horas_trabajadas !== null
+                            ? `${formatHoras(f.horas_trabajadas)} × ${f.valor_hora ? formatMoneda(f.valor_hora) : "—"}`
+                            : "—"
+                          : f.tipo_pago === "dia"
+                          ? f.dias_trabajados !== null
+                            ? `${f.dias_trabajados} día${f.dias_trabajados === 1 ? "" : "s"} × ${f.valor_dia ? formatMoneda(f.valor_dia) : "—"}`
+                            : f.horas_trabajadas !== null
+                            ? `${formatHoras(f.horas_trabajadas)} × ${f.valor_hora ? formatMoneda(f.valor_hora) : "—"}`
+                            : "—"
+                          : "—"}
+                      </td>
+                      <td className="px-4 py-3 font-mono text-red-500" data-label="Descuentos">
+                        {descuentos > 0 ? `- ${formatMoneda(descuentos)}` : "—"}
+                      </td>
+                      <td className="px-4 py-3 font-mono text-[#2C1810] font-semibold" data-label="Total">
+                        {formatMoneda(f.total)}
+                        {f.informal && (
+                          <div className="text-[10px] font-normal text-[#8B6347] mt-0.5">
+                            Blanco {formatMoneda(f.total_blanco)} · Informal {formatMoneda(f.informal.total)}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-[#B89070] text-xs whitespace-nowrap">
+                        {f.tipo_pago !== null && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              descargarRecibo(f.empleado_id);
+                            }}
+                            className="mr-3 text-[#8B6347] hover:text-[#2C1810] underline"
+                          >
+                            Recibo (PDF)
+                          </button>
+                        )}
+                        {expandido === f.empleado_id ? "▲ ocultar" : "▼ detalle"}
+                      </td>
+                    </tr>
+                    {expandido === f.empleado_id && (
+                      <tr key={`${f.empleado_id}-detalle`}>
+                        <td colSpan={6} className="detail-cell bg-[#FAF7F2] px-4 py-3">
+                          <div className="text-xs text-[#5C3D2E] space-y-1">
+                            {f.advertencias.map((a, j) => (
+                              <p key={j} className="text-amber-700">⚠ {a}</p>
+                            ))}
+                            {f.adelantos > 0 && (
+                              <p className="text-red-600">
+                                Adelantos en el período: - {formatMoneda(f.adelantos)}
+                                {f.informal && f.adelantos_informal > 0 && f.adelantos_blanco > 0 && (
+                                  <> (informal - {formatMoneda(f.adelantos_informal)} · blanco - {formatMoneda(f.adelantos_blanco)})</>
+                                )}
+                                {f.informal && f.adelantos_informal > 0 && f.adelantos_blanco === 0 && " (descontado de la parte informal)"}
+                              </p>
+                            )}
+                            {f.informal && <p className="font-semibold text-[#2C1810]">Blanco</p>}
+                            <DetalleParte p={{ ...f, total: f.total_blanco }} />
+                            {f.legal && <DetalleLegal legal={f.legal} />}
+                            {f.informal && (
+                              <>
+                                <p className="font-semibold text-[#2C1810] pt-2 border-t border-[#EDE0CC] mt-2">
+                                  Informal —{" "}
+                                  {f.informal.tipo_pago === "mensual" ? "Mensual" : f.informal.tipo_pago === "hora" ? "Por hora" : "Por día"}
+                                </p>
+                                <DetalleParte p={f.informal} />
+                                <p className="font-medium">Total informal: {formatMoneda(f.informal.total)}</p>
+                              </>
+                            )}
+                          </div>
                         </td>
                       </tr>
-                      {expandido === f.empleado_id && (
-                        <tr key={`${f.empleado_id}-detalle`}>
-                          <td colSpan={6} className="detail-cell bg-[#FAF7F2] px-4 py-3">
-                            <div className="text-xs text-[#5C3D2E] space-y-1">
-                              {f.advertencias.map((a, j) => (
-                                <p key={j} className="text-amber-700">⚠ {a}</p>
-                              ))}
-                              {f.adelantos > 0 && (
-                                <p className="text-red-600">Adelantos en el período: - {formatMoneda(f.adelantos)}</p>
-                              )}
-                              {f.informal && <p className="font-semibold text-[#2C1810]">Blanco</p>}
-                              <DetalleParte p={{ ...f, total: f.total_blanco }} />
-                              {f.legal && <DetalleLegal legal={f.legal} />}
-                              {f.informal && (
-                                <>
-                                  <p className="font-semibold text-[#2C1810] pt-2 border-t border-[#EDE0CC] mt-2">
-                                    Informal —{" "}
-                                    {f.informal.tipo_pago === "mensual" ? "Mensual" : f.informal.tipo_pago === "hora" ? "Por hora" : "Por día"}
-                                  </p>
-                                  <DetalleParte p={f.informal} />
-                                  <p className="font-medium">Total informal: {formatMoneda(f.informal.total)}</p>
-                                </>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {modalRecibos && (
+        <div
+          className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+          onClick={() => setModalRecibos(false)}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl max-h-[85vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between mb-1">
+              <h2 className="font-bold text-[#2C1810] text-lg">Recibos masivos</h2>
+              <button
+                onClick={() => setModalRecibos(false)}
+                className="text-[#B89070] hover:text-[#2C1810] text-xl leading-none"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="text-sm text-[#8B6347] mb-3">
+              Elegí a quién generarle el recibo del período {desde} → {hasta}.
+            </p>
+
+            <input
+              type="text"
+              placeholder="Buscar por nombre..."
+              value={busquedaRecibos}
+              onChange={(e) => setBusquedaRecibos(e.target.value)}
+              className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] mb-2"
+            />
+
+            {(() => {
+              const filasVisibles = filas.filter((f) =>
+                f.nombre.toLowerCase().includes(busquedaRecibos.trim().toLowerCase())
+              );
+              return (
+                <>
+                  <button
+                    onClick={() => toggleTodosRecibos(filasVisibles)}
+                    disabled={filasVisibles.length === 0}
+                    className="text-xs text-[#8B6347] hover:text-[#2C1810] underline mb-2 self-start disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {filasVisibles.length > 0 && filasVisibles.every((f) => seleccionRecibos.has(f.nombre))
+                      ? "Deseleccionar todos"
+                      : "Seleccionar todos"}
+                  </button>
+
+                  <div className="flex-1 overflow-y-auto border border-[#EDE0CC] rounded-lg divide-y divide-[#EDE0CC]">
+                    {filasVisibles.length === 0 ? (
+                      <p className="text-sm text-[#8B6347] italic p-3">Sin coincidencias.</p>
+                    ) : (
+                      filasVisibles.map((f) => (
+                        <label
+                          key={f.empleado_id}
+                          className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-[#FAF7F2] select-none"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={seleccionRecibos.has(f.nombre)}
+                            onChange={() => toggleRecibo(f.nombre)}
+                            className="h-4 w-4 rounded border-[#D4A843] text-[#2C1810] focus:ring-[#D4A843]"
+                          />
+                          <span className="text-sm text-[#2C1810]">{f.nombre}</span>
+                          {f.informal && <span className="text-[10px] text-amber-700">+ informal</span>}
+                        </label>
+                      ))
+                    )}
+                  </div>
+                </>
+              );
+            })()}
+
+            <p className="text-xs text-[#B89070] mt-2">{seleccionRecibos.size} seleccionados</p>
+
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={descargarRecibosSeleccionados}
+                disabled={seleccionRecibos.size === 0}
+                className="text-sm text-white bg-[#2C1810] hover:bg-[#3D2418] disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2 rounded-lg font-medium active:scale-95 transition-colors"
+              >
+                Descargar ZIP
+              </button>
+              <button
+                onClick={() => setModalRecibos(false)}
+                className="text-sm text-[#8B6347] hover:text-[#2C1810] px-4 py-2 rounded-lg border border-[#EDE0CC] active:scale-95 transition-colors"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LiquidacionAguinaldo() {
+  const hoy = new Date();
+  const [data, setData] = useState<AguinaldoApiResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [anio, setAnio] = useState(hoy.getFullYear());
+  const [numero, setNumero] = useState<1 | 2>(hoy.getMonth() < 6 ? 1 : 2);
+  const [nombresFiltro, setNombresFiltro] = useState<string[]>([]);
+  const [expandido, setExpandido] = useState<number | null>(null);
+  const [modalRecibos, setModalRecibos] = useState(false);
+  const [seleccionRecibos, setSeleccionRecibos] = useState<Set<string>>(new Set());
+  const [busquedaRecibos, setBusquedaRecibos] = useState("");
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    const params = new URLSearchParams();
+    params.set("anio", String(anio));
+    params.set("numero", String(numero));
+    if (nombresFiltro.length > 0) params.set("nombres", nombresFiltro.join(","));
+    const res = await fetch(`/api/aguinaldo?${params}`);
+    const json = (await res.json()) as AguinaldoApiResponse;
+    setData(json);
+    setLoading(false);
+  }, [anio, numero, nombresFiltro]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  function exportarExcel() {
+    const params = new URLSearchParams();
+    params.set("anio", String(anio));
+    params.set("numero", String(numero));
+    if (nombresFiltro.length > 0) params.set("nombres", nombresFiltro.join(","));
+    window.location.href = `/api/aguinaldo/export?${params.toString()}`;
+  }
+
+  function abrirModalRecibos() {
+    setSeleccionRecibos(new Set(filas.map((f) => f.nombre)));
+    setBusquedaRecibos("");
+    setModalRecibos(true);
+  }
+
+  function toggleRecibo(nombre: string) {
+    setSeleccionRecibos((prev) => {
+      const next = new Set(prev);
+      if (next.has(nombre)) next.delete(nombre);
+      else next.add(nombre);
+      return next;
+    });
+  }
+
+  function toggleTodosRecibos(visibles: AguinaldoEmpleado[]) {
+    const todosVisiblesSeleccionados = visibles.every((f) => seleccionRecibos.has(f.nombre));
+    setSeleccionRecibos((prev) => {
+      const next = new Set(prev);
+      for (const f of visibles) {
+        if (todosVisiblesSeleccionados) next.delete(f.nombre);
+        else next.add(f.nombre);
+      }
+      return next;
+    });
+  }
+
+  function descargarRecibosSeleccionados() {
+    if (seleccionRecibos.size === 0) return;
+    const params = new URLSearchParams();
+    params.set("anio", String(anio));
+    params.set("numero", String(numero));
+    params.set("nombres", Array.from(seleccionRecibos).join(","));
+    window.location.href = `/api/aguinaldo/recibos-zip?${params.toString()}`;
+    setModalRecibos(false);
+  }
+
+  function descargarRecibo(empleadoId: number) {
+    const params = new URLSearchParams();
+    params.set("empleadoId", String(empleadoId));
+    params.set("anio", String(anio));
+    params.set("numero", String(numero));
+    window.location.href = `/api/aguinaldo/recibo?${params.toString()}`;
+  }
+
+  const filas = data?.filas ?? [];
+  const totalPeriodo = filas.reduce((acc, f) => acc + f.total_neto, 0);
+  const conAlertas = filas.filter((f) => f.advertencias.length > 0).length;
+  const anios = [hoy.getFullYear() - 1, hoy.getFullYear(), hoy.getFullYear() + 1];
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h1 className="text-xl font-bold text-[#2C1810]">Aguinaldo (S.A.C.)</h1>
+          <p className="text-sm text-[#8B6347] mt-0.5">
+            50% de la mejor remuneración bruta del semestre, proporcional a los meses de antigüedad — cálculo interno
+            aproximado, no reemplaza el recibo de SAC oficial.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={fetchData}
+            className="text-xs text-[#8B6347] hover:text-[#2C1810] border border-[#D4A843] hover:border-[#2C1810] px-3 py-1 rounded-full active:scale-95 transition-colors"
+          >
+            ↻ Actualizar
+          </button>
+          <button
+            onClick={exportarExcel}
+            disabled={filas.length === 0}
+            className="text-xs text-white bg-[#2C1810] hover:bg-[#3D2418] disabled:opacity-40 disabled:cursor-not-allowed px-3 py-1 rounded-full transition-colors font-medium"
+          >
+            ↓ Exportar Excel
+          </button>
+          <button
+            onClick={abrirModalRecibos}
+            disabled={filas.length === 0}
+            title="Elegí a quién generarle el recibo de aguinaldo y descargá un .zip"
+            className="text-xs text-white bg-[#2C1810] hover:bg-[#3D2418] disabled:opacity-40 disabled:cursor-not-allowed px-3 py-1 rounded-full transition-colors font-medium"
+          >
+            ↓ Recibos masivos
+          </button>
         </div>
       </div>
+
+      {data && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="bg-white rounded-xl border border-[#EDE0CC] p-4">
+            <p className="text-xs text-[#8B6347] uppercase tracking-wide font-medium">Total del semestre</p>
+            <p className="text-3xl font-bold text-[#2C1810] mt-1">{formatMoneda(totalPeriodo)}</p>
+          </div>
+          <div className="bg-white rounded-xl border border-[#EDE0CC] p-4">
+            <p className="text-xs text-[#8B6347] uppercase tracking-wide font-medium">Empleados</p>
+            <p className="text-3xl font-bold text-[#2C1810] mt-1">{filas.length}</p>
+          </div>
+          <div className="bg-white rounded-xl border border-[#EDE0CC] p-4 col-span-2">
+            <p className="text-xs text-[#8B6347] uppercase tracking-wide font-medium mb-1">Semestre</p>
+            <p className="text-sm text-[#2C1810] mt-1">{data.desde} → {data.hasta}</p>
+            {conAlertas > 0 && (
+              <p className="text-xs text-amber-600 mt-1">
+                ⚠ {conAlertas} empleado{conAlertas > 1 ? "s" : ""} con datos incompletos (ver detalle)
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white rounded-xl border border-[#EDE0CC] p-4 flex flex-wrap gap-3 items-end">
+        <EmpleadoMultiSelect value={nombresFiltro} onChange={setNombresFiltro} />
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-[#8B6347] font-medium">Año</label>
+          <select
+            value={anio}
+            onChange={(e) => setAnio(Number(e.target.value))}
+            className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+          >
+            {anios.map((a) => (
+              <option key={a} value={a}>
+                {a}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-[#8B6347] font-medium">Semestre</label>
+          <select
+            value={numero}
+            onChange={(e) => setNumero(Number(e.target.value) as 1 | 2)}
+            className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+          >
+            <option value={1}>1° (enero - junio)</option>
+            <option value={2}>2° (julio - diciembre)</option>
+          </select>
+        </div>
+        {nombresFiltro.length > 0 && (
+          <button
+            onClick={() => setNombresFiltro([])}
+            className="text-xs text-[#8B6347] hover:text-red-500 underline"
+          >
+            Limpiar filtros
+          </button>
+        )}
+      </div>
+
+      <div className="bg-white rounded-xl border border-[#EDE0CC] overflow-hidden">
+        {loading && (
+          <div className="flex justify-center py-16">
+            <div className="w-8 h-8 border-2 border-[#EDE0CC] border-t-[#D4A843] rounded-full animate-spin" />
+          </div>
+        )}
+
+        {!loading && filas.length === 0 && (
+          <div className="text-center py-16 text-[#8B6347] text-sm">
+            Ningún empleado activo en este semestre.
+          </div>
+        )}
+
+        {!loading && filas.length > 0 && (
+          <table className="w-full text-sm responsive-table">
+            <thead>
+              <tr className="border-b border-[#EDE0CC] bg-[#FAF7F2]">
+                <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Empleado</th>
+                <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Mejor remuneración</th>
+                <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Meses</th>
+                <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Descuentos</th>
+                <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Total neto</th>
+                <th className="px-4 py-3"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filas.map((f, i) => {
+                const descuentos = f.legal?.total_aportes_empleado ?? 0;
+                const meses = f.blanco?.meses_computados ?? f.informal?.meses_computados ?? 0;
+                return (
+                  <Fragment key={f.empleado_id}>
+                    <tr
+                      onClick={() => setExpandido(expandido === f.empleado_id ? null : f.empleado_id)}
+                      className={`border-b border-[#EDE0CC] hover:bg-[#FAF7F2] transition-colors cursor-pointer ${i % 2 === 0 ? "" : "bg-[#FDFAF6]"}`}
+                    >
+                      <td className="px-4 py-3 font-medium text-[#2C1810]" data-label="Empleado">
+                        {f.nombre}
+                        {f.advertencias.length > 0 && (
+                          <span className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
+                            ⚠ {f.advertencias.length}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 font-mono text-[#8B6347]" data-label="Mejor remuneración">
+                        {f.blanco ? (
+                          <>
+                            {formatMoneda(f.blanco.mejor_remuneracion)}
+                            <div className="text-[10px] font-normal text-[#B89070]">
+                              {mesLabel(f.blanco.mes_mejor_remuneracion)}
+                            </div>
+                          </>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className="px-4 py-3 font-mono text-[#8B6347]" data-label="Meses">
+                        {meses}/6
+                      </td>
+                      <td className="px-4 py-3 font-mono text-red-500" data-label="Descuentos">
+                        {descuentos > 0 ? `- ${formatMoneda(descuentos)}` : "—"}
+                      </td>
+                      <td className="px-4 py-3 font-mono text-[#2C1810] font-semibold" data-label="Total neto">
+                        {formatMoneda(f.total_neto)}
+                        {f.informal && (
+                          <div className="text-[10px] font-normal text-[#8B6347] mt-0.5">
+                            Blanco {formatMoneda(f.neto_blanco)} · Informal {formatMoneda(f.aguinaldo_informal)}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-[#B89070] text-xs whitespace-nowrap">
+                        {f.blanco && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              descargarRecibo(f.empleado_id);
+                            }}
+                            className="mr-3 text-[#8B6347] hover:text-[#2C1810] underline"
+                          >
+                            Recibo (PDF)
+                          </button>
+                        )}
+                        {expandido === f.empleado_id ? "▲ ocultar" : "▼ detalle"}
+                      </td>
+                    </tr>
+                    {expandido === f.empleado_id && (
+                      <tr key={`${f.empleado_id}-detalle`}>
+                        <td colSpan={6} className="detail-cell bg-[#FAF7F2] px-4 py-3">
+                          <div className="text-xs text-[#5C3D2E] space-y-1">
+                            {f.advertencias.map((a, j) => (
+                              <p key={j} className="text-amber-700">⚠ {a}</p>
+                            ))}
+                            {f.blanco && (
+                              <>
+                                <p className="font-semibold text-[#2C1810]">Blanco</p>
+                                <p>
+                                  Mejor remuneración bruta ({mesLabel(f.blanco.mes_mejor_remuneracion)}):{" "}
+                                  {formatMoneda(f.blanco.mejor_remuneracion)}
+                                </p>
+                                <p>
+                                  Meses computados: {f.blanco.meses_computados}/6 — Aguinaldo bruto:{" "}
+                                  {formatMoneda(f.aguinaldo_blanco)}
+                                </p>
+                                {f.legal && <DetalleLegal legal={f.legal} />}
+                                <p className="font-medium">Neto blanco: {formatMoneda(f.neto_blanco)}</p>
+                              </>
+                            )}
+                            {f.informal && (
+                              <>
+                                <p className="font-semibold text-[#2C1810] pt-2 border-t border-[#EDE0CC] mt-2">
+                                  Informal (estimado)
+                                </p>
+                                <p>Mejor remuneración informal: {formatMoneda(f.informal.mejor_remuneracion)}</p>
+                                <p>
+                                  Meses computados: {f.informal.meses_computados}/6 — Aguinaldo:{" "}
+                                  {formatMoneda(f.aguinaldo_informal)}
+                                </p>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {modalRecibos && (
+        <div
+          className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+          onClick={() => setModalRecibos(false)}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl max-h-[85vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between mb-1">
+              <h2 className="font-bold text-[#2C1810] text-lg">Recibos de aguinaldo masivos</h2>
+              <button
+                onClick={() => setModalRecibos(false)}
+                className="text-[#B89070] hover:text-[#2C1810] text-xl leading-none"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="text-sm text-[#8B6347] mb-3">
+              Elegí a quién generarle el recibo del {numero}° semestre {anio}.
+            </p>
+
+            <input
+              type="text"
+              placeholder="Buscar por nombre..."
+              value={busquedaRecibos}
+              onChange={(e) => setBusquedaRecibos(e.target.value)}
+              className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] mb-2"
+            />
+
+            {(() => {
+              const filasVisibles = filas.filter((f) =>
+                f.nombre.toLowerCase().includes(busquedaRecibos.trim().toLowerCase())
+              );
+              return (
+                <>
+                  <button
+                    onClick={() => toggleTodosRecibos(filasVisibles)}
+                    disabled={filasVisibles.length === 0}
+                    className="text-xs text-[#8B6347] hover:text-[#2C1810] underline mb-2 self-start disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {filasVisibles.length > 0 && filasVisibles.every((f) => seleccionRecibos.has(f.nombre))
+                      ? "Deseleccionar todos"
+                      : "Seleccionar todos"}
+                  </button>
+
+                  <div className="flex-1 overflow-y-auto border border-[#EDE0CC] rounded-lg divide-y divide-[#EDE0CC]">
+                    {filasVisibles.length === 0 ? (
+                      <p className="text-sm text-[#8B6347] italic p-3">Sin coincidencias.</p>
+                    ) : (
+                      filasVisibles.map((f) => (
+                        <label
+                          key={f.empleado_id}
+                          className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-[#FAF7F2] select-none"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={seleccionRecibos.has(f.nombre)}
+                            onChange={() => toggleRecibo(f.nombre)}
+                            className="h-4 w-4 rounded border-[#D4A843] text-[#2C1810] focus:ring-[#D4A843]"
+                          />
+                          <span className="text-sm text-[#2C1810]">{f.nombre}</span>
+                          {f.informal && <span className="text-[10px] text-amber-700">+ informal</span>}
+                        </label>
+                      ))
+                    )}
+                  </div>
+                </>
+              );
+            })()}
+
+            <p className="text-xs text-[#B89070] mt-2">{seleccionRecibos.size} seleccionados</p>
+
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={descargarRecibosSeleccionados}
+                disabled={seleccionRecibos.size === 0}
+                className="text-sm text-white bg-[#2C1810] hover:bg-[#3D2418] disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2 rounded-lg font-medium active:scale-95 transition-colors"
+              >
+                Descargar ZIP
+              </button>
+              <button
+                onClick={() => setModalRecibos(false)}
+                className="text-sm text-[#8B6347] hover:text-[#2C1810] px-4 py-2 rounded-lg border border-[#EDE0CC] active:scale-95 transition-colors"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

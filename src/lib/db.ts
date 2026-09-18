@@ -44,6 +44,9 @@ try { db.exec("ALTER TABLE empleados ADD COLUMN nacionalidad TEXT"); } catch {}
 try { db.exec("ALTER TABLE empleados ADD COLUMN contacto_emergencia_nombre TEXT"); } catch {}
 try { db.exec("ALTER TABLE empleados ADD COLUMN contacto_emergencia_telefono TEXT"); } catch {}
 try { db.exec("ALTER TABLE empleados ADD COLUMN cbu TEXT"); } catch {}
+try { db.exec("ALTER TABLE adelantos ADD COLUMN grupo_id INTEGER"); } catch {}
+try { db.exec("ALTER TABLE adelantos ADD COLUMN cuota_numero INTEGER"); } catch {}
+try { db.exec("ALTER TABLE adelantos ADD COLUMN cuota_total INTEGER"); } catch {}
 
 // La nómina inicial solo debe cargarse la primera vez que se crea la base
 // (instalación nueva) — si corriera en cada arranque, un empleado borrado desde
@@ -977,6 +980,9 @@ export interface Adelanto {
   fecha: string;
   monto: number;
   nota: string | null;
+  grupo_id: number | null; // agrupa las cuotas de un mismo adelanto dividido; null si no está dividido
+  cuota_numero: number | null; // 1-based; null si no está dividido
+  cuota_total: number | null; // cantidad total de cuotas del grupo; null si no está dividido
   created_at: number;
 }
 
@@ -985,6 +991,36 @@ export function crearAdelanto(data: { empleadoId: number; fecha: string; monto: 
     .prepare(`INSERT INTO adelantos (empleado_id, fecha, monto, nota) VALUES (?, ?, ?, ?)`)
     .run(data.empleadoId, data.fecha, data.monto, data.nota ?? null);
   return getAdelanto(Number(info.lastInsertRowid))!;
+}
+
+// Crea un adelanto dividido en cuotas: una fila por cuota, cada una con su
+// propia fecha/monto (así cada una se descuenta en el mes que le toca), todas
+// agrupadas por `grupo_id` para poder mostrarlas juntas ("cuota 1/2") y
+// borrarlas en bloque. El grupo usa el id de la primera cuota como `grupo_id`
+// — no hace falta una tabla aparte.
+export function crearAdelantoConCuotas(data: {
+  empleadoId: number;
+  nota?: string | null;
+  cuotas: { fecha: string; monto: number }[];
+}): Adelanto[] {
+  if (data.cuotas.length === 0) throw new Error("Debe haber al menos una cuota");
+  if (data.cuotas.length === 1) return [crearAdelanto({ ...data, fecha: data.cuotas[0].fecha, monto: data.cuotas[0].monto })];
+
+  return withTransaction(() => {
+    const primera = crearAdelanto({ empleadoId: data.empleadoId, fecha: data.cuotas[0].fecha, monto: data.cuotas[0].monto, nota: data.nota });
+    const grupoId = primera.id;
+    const total = data.cuotas.length;
+    db.prepare("UPDATE adelantos SET grupo_id = ?, cuota_numero = 1, cuota_total = ? WHERE id = ?").run(grupoId, total, primera.id);
+
+    const resto = data.cuotas.slice(1).map((cuota, i) => {
+      const info = db
+        .prepare(`INSERT INTO adelantos (empleado_id, fecha, monto, nota, grupo_id, cuota_numero, cuota_total) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        .run(data.empleadoId, cuota.fecha, cuota.monto, data.nota ?? null, grupoId, i + 2, total);
+      return getAdelanto(Number(info.lastInsertRowid))!;
+    });
+
+    return [getAdelanto(primera.id)!, ...resto];
+  });
 }
 
 export function getAdelanto(id: number): Adelanto | null {
@@ -1028,6 +1064,12 @@ export function listAdelantos(filters: { desde?: string; hasta?: string; emplead
 export function eliminarAdelanto(id: number): boolean {
   const info = db.prepare("DELETE FROM adelantos WHERE id = ?").run(id);
   return info.changes > 0;
+}
+
+// Borra TODAS las cuotas de un adelanto dividido de una sola vez.
+export function eliminarGrupoAdelanto(grupoId: number): number {
+  const info = db.prepare("DELETE FROM adelantos WHERE grupo_id = ?").run(grupoId);
+  return Number(info.changes);
 }
 
 const TOPE_ADELANTO_PORCENTAJE = 0.2;
@@ -2618,9 +2660,11 @@ export interface LiquidacionEmpleado {
   dias_trabajados: number | null; // solo tipo 'dia', con horario cargado
   horas_extra: number | null; // solo tipo 'dia', con horario cargado: horas por encima de lo pactado ese día
   total_por_horas: number | null; // horas_trabajadas × valor_hora — referencia para comparar contra 'total' (mensual y dia)
-  adelantos: number; // suma de adelantos cargados con fecha dentro del período — se descuentan del total blanco primero
+  adelantos: number; // suma de adelantos cargados con fecha dentro del período
   legal: AportesLegales | null; // presentismo + aportes/contribuciones legales de la parte blanca, null si no tiene tipo_pago
-  total_blanco: number; // sueldo_bruto (con presentismo) - aportes legales - adelantos
+  total_blanco: number; // sueldo_bruto (con presentismo) - aportes legales - adelantos_blanco
+  adelantos_blanco: number; // parte de `adelantos` que no entró en la informal (o todo, si no tiene) y se descontó de la blanca
+  adelantos_informal: number; // parte de `adelantos` descontada de la informal (prioridad, hasta agotarla)
   informal: ParteLiquidacionInformal | null; // parte "informal", independiente, null si el empleado no tiene
   total: number; // total_blanco + informal.total (o solo total_blanco si no hay parte informal)
   advertencias: string[];
@@ -2973,13 +3017,15 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
     const legal = emp.tipo_pago !== null ? calcularAportesLegales(parteBlanco, configLegal) : null;
     const netoBlanco = legal ? legal.sueldo_bruto - legal.total_aportes_empleado : parteBlanco.bruto;
 
-    // Los adelantos son un solo pozo (no hay "adelanto blanco/informal") — se
-    // descuentan primero del total blanco, y si lo superan, el excedente se
-    // descuenta del informal.
-    const totalBlanco = Math.max(0, netoBlanco - adelantos);
-    const adelantosRestantes = Math.max(0, adelantos - netoBlanco);
-    const totalInformal = parteInformal ? parteInformal.bruto - adelantosRestantes : null;
-    if (totalInformal !== null && totalInformal < 0) advertencias.push("Los adelantos superan el total a pagar");
+    // Los adelantos son un solo pozo (no hay "adelanto blanco/informal" al
+    // cargarlo) pero se descuentan primero de la parte informal si el
+    // empleado tiene una — y solo el excedente, si lo hay, de la parte
+    // blanca. Si no tiene parte informal, se descuentan directo de la blanca.
+    const adelantosSobreInformal = parteInformal ? Math.min(adelantos, parteInformal.bruto) : 0;
+    const adelantosSobreBlanco = adelantos - adelantosSobreInformal;
+    const totalInformal = parteInformal ? parteInformal.bruto - adelantosSobreInformal : null;
+    const totalBlanco = Math.max(0, netoBlanco - adelantosSobreBlanco);
+    if (adelantosSobreBlanco > netoBlanco) advertencias.push("Los adelantos superan el total a pagar");
 
     return {
       empleado_id: emp.id,
@@ -2988,8 +3034,202 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
       adelantos,
       legal,
       total_blanco: totalBlanco,
+      adelantos_blanco: adelantosSobreBlanco,
+      adelantos_informal: adelantosSobreInformal,
       informal: parteInformal ? { ...sinBruto(parteInformal), total: totalInformal! } : null,
       total: totalBlanco + (totalInformal ?? 0),
+      advertencias,
+    };
+  });
+}
+
+// ── Aguinaldo (SAC) ──────────────────────────────────────────────────────────
+// Sueldo Anual Complementario: 50% de la mejor remuneración bruta mensual del
+// semestre (art. 121/122 LCT, Ley 27.073), proporcional a los meses de
+// antigüedad ya transcurridos dentro del semestre. Es un concepto legal con
+// período (semestre calendario) y base de cálculo distintos a los del sueldo
+// mensual — por eso se calcula y se recibe aparte, no como una fila más de
+// calcularLiquidacion. La parte informal no tiene aguinaldo legal (no está
+// registrada), pero se estima un monto de referencia con el mismo criterio,
+// sin aportes ni contribuciones.
+
+export interface Semestre {
+  anio: number;
+  numero: 1 | 2;
+}
+
+export function semestreActual(): Semestre {
+  const hoy = fechaAR(Math.floor(Date.now() / 1000));
+  const mes = Number(hoy.slice(5, 7));
+  return { anio: Number(hoy.slice(0, 4)), numero: mes <= 6 ? 1 : 2 };
+}
+
+function rangoMes(anio: number, mes: number): { desde: string; hasta: string } {
+  const desde = `${anio}-${String(mes).padStart(2, "0")}-01`;
+  const ultimoDia = new Date(Date.UTC(anio, mes, 0)).getUTCDate();
+  const hasta = `${anio}-${String(mes).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`;
+  return { desde, hasta };
+}
+
+export function rangoSemestre(s: Semestre): { desde: string; hasta: string } {
+  const [primero, ultimo] = s.numero === 1 ? [1, 6] : [7, 12];
+  return { desde: rangoMes(s.anio, primero).desde, hasta: rangoMes(s.anio, ultimo).hasta };
+}
+
+// De los meses del semestre ya transcurridos, cuáles le "corresponden" a este
+// empleado según su antigüedad — mismo criterio de "más de la mitad del mes"
+// que se usa para las vacaciones proporcionales (LCT art. 153): si ingresó el
+// día 15 o antes de ese mes cuenta completo, si ingresó después ese mes no
+// suma. Sin fecha de ingreso cargada, se asume que le corresponden todos.
+function mesesQueCorrespondenSemestre(
+  fechaIngreso: string | null,
+  mesesTranscurridos: { anio: number; mes: number }[]
+): { anio: number; mes: number }[] {
+  if (!fechaIngreso) return mesesTranscurridos;
+  const ingreso = new Date(`${fechaIngreso}T00:00:00Z`);
+  return mesesTranscurridos.filter(({ anio, mes }) => {
+    const finMes = new Date(Date.UTC(anio, mes, 0, 23, 59, 59));
+    if (ingreso > finMes) return false; // todavía no había ingresado ese mes
+    const ingresoEnEsteMes = ingreso.getUTCFullYear() === anio && ingreso.getUTCMonth() + 1 === mes;
+    return !(ingresoEnEsteMes && ingreso.getUTCDate() > 15);
+  });
+}
+
+export interface AguinaldoParte {
+  mejor_remuneracion: number;
+  mes_mejor_remuneracion: string | null; // ISO (primer día del mes) de dónde salió la mejor remuneración
+  meses_computados: number; // meses de antigüedad ya transcurridos dentro del semestre (0-6)
+}
+
+export interface AguinaldoEmpleado {
+  empleado_id: number;
+  nombre: string;
+  blanco: AguinaldoParte | null; // null si no tuvo sueldo bruto (blanco) ningún mes del semestre
+  aguinaldo_blanco: number; // bruto del SAC, antes de aportes
+  legal: AportesLegales | null; // aportes/contribuciones sobre el aguinaldo blanco (sin presentismo ni seguro de vida)
+  neto_blanco: number;
+  informal: AguinaldoParte | null;
+  aguinaldo_informal: number; // estimado, sin aportes (no está registrado)
+  total_neto: number; // neto_blanco + aguinaldo_informal
+  advertencias: string[];
+}
+
+// Mismo motor de aportes/contribuciones que calcularAportesLegales, pero sin
+// presentismo (ya jugó, si correspondía, en los sueldos mensuales que
+// compiten por "mejor remuneración") y sin el seguro de vida fijo (es una
+// prima mensual por empleado, no por evento de pago) — se le resta del costo
+// empleador de esta parte.
+function calcularAportesLegalesAguinaldo(bruto: number, config: ConfiguracionLiquidacion): AportesLegales {
+  const base = calcularAportesLegales(
+    {
+      tipo_pago: "dia", // cualquier tipo != "mensual" alcanza para que no aplique presentismo
+      sueldo_mensual: null,
+      valor_hora: null,
+      valor_dia: null,
+      horas_trabajadas: null,
+      horas_en_curso: false,
+      horas_pactadas: null,
+      valor_hora_equivalente: null,
+      minutos_perdidos: 0,
+      descuento_tardanza: 0,
+      dias_ausencia: 0,
+      horas_ausencia: 0,
+      descuento_ausencia: 0,
+      dias_ausencia_justificada: 0,
+      horas_ausencia_justificada: 0,
+      dias_trabajados: null,
+      horas_extra: null,
+      total_por_horas: null,
+      bruto,
+    },
+    config
+  );
+  return {
+    ...base,
+    costo_seguro_vida: 0,
+    costo_empleador_total: base.costo_empleador_total - base.costo_seguro_vida,
+    costo_total_empleador: base.costo_total_empleador - base.costo_seguro_vida,
+  };
+}
+
+export function calcularAguinaldo(semestre: Semestre, nombres?: string[]): AguinaldoEmpleado[] {
+  const empleados = listEmpleados().filter(
+    (e) => e.activo && (!nombres || nombres.length === 0 || nombres.includes(e.nombre))
+  );
+  const configLegal = getConfiguracionLiquidacion();
+  const hoy = fechaAR(Math.floor(Date.now() / 1000));
+  const mesesDelSemestre = semestre.numero === 1 ? [1, 2, 3, 4, 5, 6] : [7, 8, 9, 10, 11, 12];
+
+  // Liquidación completa de cada mes YA transcurrido del semestre, una sola
+  // vez para todos los empleados — de ahí sacamos, por empleado, el sueldo
+  // bruto blanco (ya incluye presentismo si correspondía ese mes) y
+  // reconstruimos el bruto informal (su `total` ya viene neto de adelantos de
+  // ese mes, así que le sumamos de vuelta lo que se le haya descontado).
+  const porMes = mesesDelSemestre
+    .map((mes) => ({ anio: semestre.anio, mes, rango: rangoMes(semestre.anio, mes) }))
+    .filter(({ rango }) => rango.desde <= hoy)
+    .map(({ anio, mes, rango }) => ({ anio, mes, rango, filas: calcularLiquidacion({ ...rango, nombres }) }));
+
+  const mesesTranscurridos = porMes.map(({ anio, mes }) => ({ anio, mes }));
+
+  return empleados.map((emp): AguinaldoEmpleado => {
+    const advertencias: string[] = [];
+    const mesesCorrespondientes = mesesQueCorrespondenSemestre(emp.fecha_ingreso, mesesTranscurridos);
+    const clavesCorrespondientes = new Set(mesesCorrespondientes.map(({ anio, mes }) => `${anio}-${mes}`));
+
+    let mejorBlanco = 0;
+    let mesMejorBlanco: string | null = null;
+    let huboDatosBlanco = false;
+    let mejorInformal = 0;
+    let huboDatosInformal = false;
+
+    for (const { anio, mes, rango, filas } of porMes) {
+      if (!clavesCorrespondientes.has(`${anio}-${mes}`)) continue; // todavía no le correspondía este mes
+      const fila = filas.find((f) => f.empleado_id === emp.id);
+      if (!fila) continue;
+      if (fila.legal) {
+        huboDatosBlanco = true;
+        if (fila.legal.sueldo_bruto > mejorBlanco) {
+          mejorBlanco = fila.legal.sueldo_bruto;
+          mesMejorBlanco = rango.desde;
+        }
+      }
+      if (fila.informal) {
+        huboDatosInformal = true;
+        const brutoInformalMes = fila.informal.total + fila.adelantos_informal;
+        if (brutoInformalMes > mejorInformal) mejorInformal = brutoInformalMes;
+      }
+    }
+
+    const mesesComputados = mesesCorrespondientes.length;
+
+    const blanco: AguinaldoParte | null = huboDatosBlanco
+      ? { mejor_remuneracion: mejorBlanco, mes_mejor_remuneracion: mesMejorBlanco, meses_computados: mesesComputados }
+      : null;
+    const informal: AguinaldoParte | null = huboDatosInformal
+      ? { mejor_remuneracion: mejorInformal, mes_mejor_remuneracion: null, meses_computados: mesesComputados }
+      : null;
+
+    const aguinaldoBlanco = blanco ? (blanco.mejor_remuneracion / 12) * blanco.meses_computados : 0;
+    const aguinaldoInformal = informal ? (informal.mejor_remuneracion / 12) * informal.meses_computados : 0;
+
+    const legal = blanco && aguinaldoBlanco > 0 ? calcularAportesLegalesAguinaldo(aguinaldoBlanco, configLegal) : null;
+    const netoBlanco = legal ? aguinaldoBlanco - legal.total_aportes_empleado : aguinaldoBlanco;
+
+    if (mesesComputados === 0 && (huboDatosBlanco || huboDatosInformal)) {
+      advertencias.push("Ingresó después de este semestre — no le corresponde aguinaldo todavía");
+    }
+
+    return {
+      empleado_id: emp.id,
+      nombre: emp.nombre,
+      blanco,
+      aguinaldo_blanco: aguinaldoBlanco,
+      legal,
+      neto_blanco: netoBlanco,
+      informal,
+      aguinaldo_informal: aguinaldoInformal,
+      total_neto: netoBlanco + aguinaldoInformal,
       advertencias,
     };
   });
