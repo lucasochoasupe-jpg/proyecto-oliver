@@ -2,6 +2,7 @@
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import fs from "node:fs";
+import type { FilaPlanillaCaja } from "./caja-import";
 
 const DATA_DIR = path.resolve(process.cwd(), "data");
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -44,6 +45,7 @@ try { db.exec("ALTER TABLE empleados ADD COLUMN nacionalidad TEXT"); } catch {}
 try { db.exec("ALTER TABLE empleados ADD COLUMN contacto_emergencia_nombre TEXT"); } catch {}
 try { db.exec("ALTER TABLE empleados ADD COLUMN contacto_emergencia_telefono TEXT"); } catch {}
 try { db.exec("ALTER TABLE empleados ADD COLUMN cbu TEXT"); } catch {}
+try { db.exec("ALTER TABLE settings ADD COLUMN caja_sheet_url TEXT"); } catch {}
 try { db.exec("ALTER TABLE adelantos ADD COLUMN grupo_id INTEGER"); } catch {}
 try { db.exec("ALTER TABLE adelantos ADD COLUMN cuota_numero INTEGER"); } catch {}
 try { db.exec("ALTER TABLE adelantos ADD COLUMN cuota_total INTEGER"); } catch {}
@@ -249,6 +251,44 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_adelantos_empleado_fecha
     ON adelantos(empleado_id, fecha);
 
+  CREATE TABLE IF NOT EXISTS caja_cuentas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre TEXT NOT NULL UNIQUE,
+    activo INTEGER NOT NULL DEFAULT 1,
+    orden INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  CREATE TABLE IF NOT EXISTS caja_conceptos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre TEXT NOT NULL UNIQUE,
+    activo INTEGER NOT NULL DEFAULT 1,
+    orden INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  CREATE TABLE IF NOT EXISTS caja_movimientos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fecha TEXT NOT NULL,
+    nombre TEXT NOT NULL,
+    concepto_id INTEGER NOT NULL REFERENCES caja_conceptos(id),
+    cuenta_id INTEGER NOT NULL REFERENCES caja_cuentas(id),
+    corresponde_a TEXT NOT NULL,
+    tipo_movimiento TEXT NOT NULL CHECK(tipo_movimiento IN ('ingreso', 'salida')),
+    importe_neto REAL NOT NULL,
+    iva REAL NOT NULL DEFAULT 0,
+    otros_conceptos REAL NOT NULL DEFAULT 0,
+    nota TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_caja_movimientos_fecha
+    ON caja_movimientos(fecha);
+  CREATE INDEX IF NOT EXISTS idx_caja_movimientos_cuenta
+    ON caja_movimientos(cuenta_id);
+  CREATE INDEX IF NOT EXISTS idx_caja_movimientos_concepto
+    ON caja_movimientos(concepto_id);
+
   CREATE TABLE IF NOT EXISTS puestos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nombre TEXT NOT NULL UNIQUE,
@@ -308,7 +348,8 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
-    tolerancia_min INTEGER NOT NULL DEFAULT 30
+    tolerancia_min INTEGER NOT NULL DEFAULT 30,
+    caja_sheet_url TEXT
   );
 
   INSERT OR IGNORE INTO settings (id, tolerancia_min) VALUES (1, 30);
@@ -2144,6 +2185,15 @@ export function setTolerancia(min: number): void {
   db.prepare("UPDATE settings SET tolerancia_min = ? WHERE id = 1").run(min);
 }
 
+export function getCajaSheetUrl(): string | null {
+  const row = db.prepare("SELECT caja_sheet_url FROM settings WHERE id = 1").get() as { caja_sheet_url: string | null };
+  return row.caja_sheet_url;
+}
+
+export function setCajaSheetUrl(url: string | null): void {
+  db.prepare("UPDATE settings SET caja_sheet_url = ? WHERE id = 1").run(url);
+}
+
 export interface ConfiguracionLiquidacion {
   empresa_razon_social: string | null;
   empresa_domicilio: string | null;
@@ -3465,6 +3515,477 @@ export function asignarEmpleadosAPuesto(puestoId: number, empleadoIds: number[])
       db.prepare(`UPDATE empleados SET puesto_id = ? WHERE id IN (${placeholders})`).run(puestoId, ...empleadoIds);
     }
   });
+}
+
+// ── Caja (libro de ingresos/egresos) ────────────────────────────────────────
+// Reemplaza la planilla de caja diaria del negocio. Cuenta (Caja Efectivo,
+// bancos, cheques de terceros) y concepto (Sueldos, Proveedores, Movilidad,
+// etc.) son listas fijas administrables — a diferencia de una planilla a
+// mano, donde "Sueldos" y "sueldos " terminan siendo categorías distintas y
+// rompen los totales, acá se eligen de una lista y no se pueden tipear mal.
+
+export interface CajaCuenta {
+  id: number;
+  nombre: string;
+  activo: number;
+  orden: number;
+  created_at: number;
+}
+
+export function listCajaCuentas(soloActivas = false): CajaCuenta[] {
+  const where = soloActivas ? "WHERE activo = 1" : "";
+  return db.prepare(`SELECT * FROM caja_cuentas ${where} ORDER BY orden ASC, nombre ASC`).all() as unknown as CajaCuenta[];
+}
+
+export function getCajaCuenta(id: number): CajaCuenta | null {
+  return (db.prepare("SELECT * FROM caja_cuentas WHERE id = ?").get(id) as unknown as CajaCuenta | undefined) ?? null;
+}
+
+export function crearCajaCuenta(nombre: string): CajaCuenta {
+  const info = db.prepare("INSERT INTO caja_cuentas (nombre) VALUES (?)").run(nombre.trim());
+  return getCajaCuenta(Number(info.lastInsertRowid))!;
+}
+
+export function updateCajaCuenta(id: number, patch: { nombre?: string; activo?: boolean; orden?: number }): void {
+  const current = getCajaCuenta(id);
+  if (!current) return;
+  db.prepare("UPDATE caja_cuentas SET nombre = ?, activo = ?, orden = ? WHERE id = ?").run(
+    patch.nombre !== undefined ? patch.nombre.trim() : current.nombre,
+    patch.activo !== undefined ? (patch.activo ? 1 : 0) : current.activo,
+    patch.orden !== undefined ? patch.orden : current.orden,
+    id
+  );
+}
+
+export interface CajaConcepto {
+  id: number;
+  nombre: string;
+  activo: number;
+  orden: number;
+  created_at: number;
+}
+
+export function listCajaConceptos(soloActivos = false): CajaConcepto[] {
+  const where = soloActivos ? "WHERE activo = 1" : "";
+  return db.prepare(`SELECT * FROM caja_conceptos ${where} ORDER BY orden ASC, nombre ASC`).all() as unknown as CajaConcepto[];
+}
+
+export function getCajaConcepto(id: number): CajaConcepto | null {
+  return (db.prepare("SELECT * FROM caja_conceptos WHERE id = ?").get(id) as unknown as CajaConcepto | undefined) ?? null;
+}
+
+export function crearCajaConcepto(nombre: string): CajaConcepto {
+  const info = db.prepare("INSERT INTO caja_conceptos (nombre) VALUES (?)").run(nombre.trim());
+  return getCajaConcepto(Number(info.lastInsertRowid))!;
+}
+
+export function updateCajaConcepto(id: number, patch: { nombre?: string; activo?: boolean; orden?: number }): void {
+  const current = getCajaConcepto(id);
+  if (!current) return;
+  db.prepare("UPDATE caja_conceptos SET nombre = ?, activo = ?, orden = ? WHERE id = ?").run(
+    patch.nombre !== undefined ? patch.nombre.trim() : current.nombre,
+    patch.activo !== undefined ? (patch.activo ? 1 : 0) : current.activo,
+    patch.orden !== undefined ? patch.orden : current.orden,
+    id
+  );
+}
+
+// Fila cruda tal como sale del JOIN — antes de calcular importe_total y el
+// monto con signo.
+interface CajaMovimientoRow {
+  id: number;
+  fecha: string;
+  nombre: string;
+  concepto_id: number;
+  concepto_nombre: string;
+  cuenta_id: number;
+  cuenta_nombre: string;
+  corresponde_a: string;
+  tipo_movimiento: "ingreso" | "salida";
+  importe_neto: number;
+  iva: number;
+  otros_conceptos: number;
+  nota: string | null;
+  created_at: number;
+}
+
+export interface CajaMovimiento extends CajaMovimientoRow {
+  importe_total: number; // importe_neto + iva + otros_conceptos
+  monto_con_signo: number; // +importe_total si ingreso, -importe_total si salida
+}
+
+function conImporteTotal(row: CajaMovimientoRow): CajaMovimiento {
+  const importeTotal = row.importe_neto + row.iva + row.otros_conceptos;
+  return { ...row, importe_total: importeTotal, monto_con_signo: row.tipo_movimiento === "ingreso" ? importeTotal : -importeTotal };
+}
+
+const SELECT_CAJA_MOVIMIENTOS = `
+  SELECT m.*, co.nombre AS concepto_nombre, cu.nombre AS cuenta_nombre
+  FROM caja_movimientos m
+  JOIN caja_conceptos co ON co.id = m.concepto_id
+  JOIN caja_cuentas cu ON cu.id = m.cuenta_id
+`;
+
+export function listCajaMovimientos(
+  filters: {
+    desde?: string;
+    hasta?: string;
+    cuentaId?: number;
+    conceptoId?: number;
+    tipoMovimiento?: "ingreso" | "salida";
+  } = {}
+): CajaMovimiento[] {
+  const condiciones: string[] = [];
+  const params: (string | number)[] = [];
+  if (filters.desde) {
+    condiciones.push("m.fecha >= ?");
+    params.push(filters.desde);
+  }
+  if (filters.hasta) {
+    condiciones.push("m.fecha <= ?");
+    params.push(filters.hasta);
+  }
+  if (filters.cuentaId) {
+    condiciones.push("m.cuenta_id = ?");
+    params.push(filters.cuentaId);
+  }
+  if (filters.conceptoId) {
+    condiciones.push("m.concepto_id = ?");
+    params.push(filters.conceptoId);
+  }
+  if (filters.tipoMovimiento) {
+    condiciones.push("m.tipo_movimiento = ?");
+    params.push(filters.tipoMovimiento);
+  }
+  const where = condiciones.length > 0 ? `WHERE ${condiciones.join(" AND ")}` : "";
+  const rows = db
+    .prepare(`${SELECT_CAJA_MOVIMIENTOS} ${where} ORDER BY m.fecha DESC, m.created_at DESC`)
+    .all(...params) as unknown as CajaMovimientoRow[];
+  return rows.map(conImporteTotal);
+}
+
+export function getCajaMovimiento(id: number): CajaMovimiento | null {
+  const row = db.prepare(`${SELECT_CAJA_MOVIMIENTOS} WHERE m.id = ?`).get(id) as unknown as CajaMovimientoRow | undefined;
+  return row ? conImporteTotal(row) : null;
+}
+
+export function crearCajaMovimiento(data: {
+  fecha: string;
+  nombre: string;
+  conceptoId: number;
+  cuentaId: number;
+  correspondeA: string;
+  tipoMovimiento: "ingreso" | "salida";
+  importeNeto: number;
+  iva?: number;
+  otrosConceptos?: number;
+  nota?: string | null;
+}): CajaMovimiento {
+  const info = db
+    .prepare(
+      `INSERT INTO caja_movimientos (fecha, nombre, concepto_id, cuenta_id, corresponde_a, tipo_movimiento, importe_neto, iva, otros_conceptos, nota)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      data.fecha,
+      data.nombre.trim(),
+      data.conceptoId,
+      data.cuentaId,
+      data.correspondeA,
+      data.tipoMovimiento,
+      data.importeNeto,
+      data.iva ?? 0,
+      data.otrosConceptos ?? 0,
+      data.nota ?? null
+    );
+  return getCajaMovimiento(Number(info.lastInsertRowid))!;
+}
+
+export function updateCajaMovimiento(
+  id: number,
+  patch: Partial<{
+    fecha: string;
+    nombre: string;
+    conceptoId: number;
+    cuentaId: number;
+    correspondeA: string;
+    tipoMovimiento: "ingreso" | "salida";
+    importeNeto: number;
+    iva: number;
+    otrosConceptos: number;
+    nota: string | null;
+  }>
+): CajaMovimiento | null {
+  const current = getCajaMovimiento(id);
+  if (!current) return null;
+  db.prepare(
+    `UPDATE caja_movimientos SET fecha = ?, nombre = ?, concepto_id = ?, cuenta_id = ?, corresponde_a = ?,
+       tipo_movimiento = ?, importe_neto = ?, iva = ?, otros_conceptos = ?, nota = ?
+     WHERE id = ?`
+  ).run(
+    patch.fecha ?? current.fecha,
+    patch.nombre !== undefined ? patch.nombre.trim() : current.nombre,
+    patch.conceptoId ?? current.concepto_id,
+    patch.cuentaId ?? current.cuenta_id,
+    patch.correspondeA ?? current.corresponde_a,
+    patch.tipoMovimiento ?? current.tipo_movimiento,
+    patch.importeNeto ?? current.importe_neto,
+    patch.iva !== undefined ? patch.iva : current.iva,
+    patch.otrosConceptos !== undefined ? patch.otrosConceptos : current.otros_conceptos,
+    patch.nota !== undefined ? patch.nota : current.nota,
+    id
+  );
+  return getCajaMovimiento(id);
+}
+
+export function eliminarCajaMovimiento(id: number): boolean {
+  const info = db.prepare("DELETE FROM caja_movimientos WHERE id = ?").run(id);
+  return Number(info.changes) > 0;
+}
+
+// ── Resumen de caja: saldo por cuenta y total por concepto × cuenta ─────────
+export interface CajaResumenCuenta {
+  cuenta_id: number;
+  cuenta_nombre: string;
+  total: number;
+}
+
+export interface CajaResumenConceptoCuenta {
+  concepto_id: number;
+  concepto_nombre: string;
+  porCuenta: Record<number, number>; // cuenta_id -> total
+  total: number;
+}
+
+export interface CajaResumen {
+  porCuenta: CajaResumenCuenta[];
+  totalGeneral: number;
+  porConcepto: CajaResumenConceptoCuenta[];
+  cuentas: CajaCuenta[]; // orden de columnas para la tabla concepto × cuenta
+}
+
+export function calcularResumenCaja(filters: { desde?: string; hasta?: string } = {}): CajaResumen {
+  const movimientos = listCajaMovimientos(filters);
+  const cuentas = listCajaCuentas();
+
+  const porCuentaMap = new Map<number, CajaResumenCuenta>();
+  for (const c of cuentas) porCuentaMap.set(c.id, { cuenta_id: c.id, cuenta_nombre: c.nombre, total: 0 });
+  for (const m of movimientos) {
+    const entry = porCuentaMap.get(m.cuenta_id);
+    if (entry) entry.total += m.monto_con_signo;
+  }
+
+  const porConceptoMap = new Map<number, CajaResumenConceptoCuenta>();
+  for (const m of movimientos) {
+    let entry = porConceptoMap.get(m.concepto_id);
+    if (!entry) {
+      entry = { concepto_id: m.concepto_id, concepto_nombre: m.concepto_nombre, porCuenta: {}, total: 0 };
+      porConceptoMap.set(m.concepto_id, entry);
+    }
+    entry.porCuenta[m.cuenta_id] = (entry.porCuenta[m.cuenta_id] ?? 0) + m.monto_con_signo;
+    entry.total += m.monto_con_signo;
+  }
+
+  return {
+    porCuenta: Array.from(porCuentaMap.values()),
+    totalGeneral: movimientos.reduce((acc, m) => acc + m.monto_con_signo, 0),
+    // Ordenado por magnitud (no alfabético) — con decenas de conceptos, lo que
+    // más mueve la caja (sea ingreso o egreso) queda arriba en vez de perderse
+    // en el medio de una lista de la A a la Z.
+    porConcepto: Array.from(porConceptoMap.values()).sort((a, b) => Math.abs(b.total) - Math.abs(a.total)),
+    cuentas,
+  };
+}
+
+// ── Importación de Caja desde la planilla de Google Sheets ─────────────────
+// El parseo del CSV vive en caja-import.ts (sin tocar la base) — acá solo se
+// resuelve contra lo que ya existe y se decide qué es nuevo.
+
+function normalizarTexto(s: string): string {
+  return s.trim().toLowerCase();
+}
+
+function getCajaCuentaPorNombreFlexible(nombre: string): CajaCuenta | null {
+  const objetivo = normalizarTexto(nombre);
+  return listCajaCuentas().find((c) => normalizarTexto(c.nombre) === objetivo) ?? null;
+}
+
+function getCajaConceptoPorNombreFlexible(nombre: string): CajaConcepto | null {
+  const objetivo = normalizarTexto(nombre);
+  return listCajaConceptos().find((c) => normalizarTexto(c.nombre) === objetivo) ?? null;
+}
+
+function getOrCrearCajaCuentaFlexible(nombre: string): CajaCuenta {
+  return getCajaCuentaPorNombreFlexible(nombre) ?? crearCajaCuenta(nombre);
+}
+
+function getOrCrearCajaConceptoFlexible(nombre: string): CajaConcepto {
+  return getCajaConceptoPorNombreFlexible(nombre) ?? crearCajaConcepto(nombre);
+}
+
+// Si la planilla no trae Nombre, se usa el concepto como respaldo (algunas
+// filas de la planilla real vienen así) — hay que usar el mismo criterio acá
+// que al guardar el movimiento, si no la firma de deduplicación no coincide
+// con lo que ya está en la base.
+function nombreEfectivo(fila: FilaPlanillaCaja): string {
+  if (fila.nombre) return fila.nombre;
+  return getCajaConceptoPorNombreFlexible(fila.concepto)?.nombre ?? fila.concepto;
+}
+
+// Firma de un movimiento para detectar si una fila de la planilla ya está
+// cargada — por contenido (fecha + nombre + cuenta + importe + tipo), ya que
+// la planilla no tiene ningún id estable para comparar. A propósito NO
+// incluye el concepto: es el campo con más variantes de tipeo en la
+// planilla, y como esas variantes se van normalizando con el tiempo (a mano,
+// o corrigiendo la planilla), comparar por concepto haría que la misma
+// transacción real se reimporte cada vez que cambia el texto de su
+// categoría.
+function firmaMovimiento(fecha: string, nombre: string, cuenta: string, importeNeto: number, tipo: string): string {
+  return `${fecha}|${normalizarTexto(nombre)}|${normalizarTexto(cuenta)}|${importeNeto.toFixed(2)}|${tipo}`;
+}
+
+function firmasExistentes(): Set<string> {
+  const rows = db
+    .prepare(
+      `SELECT m.fecha, m.nombre, cu.nombre AS cuenta_nombre, m.importe_neto, m.tipo_movimiento
+       FROM caja_movimientos m
+       JOIN caja_cuentas cu ON cu.id = m.cuenta_id`
+    )
+    .all() as { fecha: string; nombre: string; cuenta_nombre: string; importe_neto: number; tipo_movimiento: string }[];
+  return new Set(
+    rows.map((r) => firmaMovimiento(r.fecha, r.nombre, r.cuenta_nombre, r.importe_neto, r.tipo_movimiento))
+  );
+}
+
+export interface CajaImportSaltada {
+  motivo: string;
+  fecha: string | null;
+  nombre: string;
+  concepto: string;
+  cuenta: string;
+  importeNeto: number;
+}
+
+export interface CajaImportFilaNueva {
+  fecha: string;
+  nombre: string;
+  concepto: string;
+  cuenta: string;
+  importeNeto: number;
+  tipoMovimiento: "ingreso" | "salida";
+  advertencia: string | null; // ej. año de la fecha no coincide con "Corresponde a" — posible typo
+}
+
+export interface CajaImportPreview {
+  totalFilas: number;
+  nuevas: number;
+  nuevasFilas: CajaImportFilaNueva[]; // detalle de lo que se va a crear — para poder revisarlo antes de confirmar
+  yaCargadas: number;
+  saltadas: CajaImportSaltada[];
+  conceptosNuevos: string[]; // conceptos de la planilla que no existen todavía (se crearían)
+  cuentasNuevas: string[]; // ídem para cuentas
+}
+
+function validarFila(fila: FilaPlanillaCaja): CajaImportSaltada | null {
+  if (!fila.cuenta) return { motivo: "sin cuenta", fecha: fila.fecha, nombre: fila.nombre, concepto: fila.concepto, cuenta: fila.cuenta, importeNeto: fila.importeNeto };
+  if (!fila.concepto) return { motivo: "sin concepto", fecha: fila.fecha, nombre: fila.nombre, concepto: fila.concepto, cuenta: fila.cuenta, importeNeto: fila.importeNeto };
+  if (!fila.fecha) return { motivo: "fecha inválida", fecha: fila.fecha, nombre: fila.nombre, concepto: fila.concepto, cuenta: fila.cuenta, importeNeto: fila.importeNeto };
+  if (!fila.tipoMovimiento) return { motivo: "sin tipo de movimiento (Ingreso/Salida)", fecha: fila.fecha, nombre: fila.nombre, concepto: fila.concepto, cuenta: fila.cuenta, importeNeto: fila.importeNeto };
+  if (fila.importeNeto <= 0) return { motivo: "importe 0 o inválido", fecha: fila.fecha, nombre: fila.nombre, concepto: fila.concepto, cuenta: fila.cuenta, importeNeto: fila.importeNeto };
+  return null;
+}
+
+// El año de la fecha debería coincidir con el de "Corresponde a" — la fila
+// real que motivó este chequeo tenía Año/Fecha tipeados como "2006" en vez
+// de "2026" mientras que "Corresponde a" decía bien "08-2026". No se
+// descarta la fila (podría ser legítima), pero se marca para que se note en
+// la revisión antes de confirmar.
+function advertenciaFecha(fila: FilaPlanillaCaja): string | null {
+  if (!fila.fecha || !fila.correspondeA) return null;
+  const anioFecha = fila.fecha.slice(0, 4);
+  const anioCorresponde = fila.correspondeA.slice(0, 4);
+  if (anioCorresponde.length === 4 && anioFecha !== anioCorresponde) {
+    return `el año de la fecha (${anioFecha}) no coincide con "Corresponde a" (${anioCorresponde}) — revisar si es un typo`;
+  }
+  return null;
+}
+
+export function previsualizarImportacionCaja(filas: FilaPlanillaCaja[]): CajaImportPreview {
+  const existentes = firmasExistentes();
+  const cuentasConocidas = new Set(listCajaCuentas().map((c) => normalizarTexto(c.nombre)));
+  const conceptosConocidos = new Set(listCajaConceptos().map((c) => normalizarTexto(c.nombre)));
+
+  const saltadas: CajaImportSaltada[] = [];
+  const nuevasFilas: CajaImportFilaNueva[] = [];
+  const conceptosNuevos = new Set<string>();
+  const cuentasNuevas = new Set<string>();
+  let yaCargadas = 0;
+
+  for (const fila of filas) {
+    const problema = validarFila(fila);
+    if (problema) {
+      saltadas.push(problema);
+      continue;
+    }
+    const firma = firmaMovimiento(fila.fecha!, nombreEfectivo(fila), fila.cuenta, fila.importeNeto, fila.tipoMovimiento!);
+    if (existentes.has(firma)) {
+      yaCargadas++;
+      continue;
+    }
+    nuevasFilas.push({
+      fecha: fila.fecha!,
+      nombre: nombreEfectivo(fila),
+      concepto: fila.concepto,
+      cuenta: fila.cuenta,
+      importeNeto: fila.importeNeto,
+      tipoMovimiento: fila.tipoMovimiento!,
+      advertencia: advertenciaFecha(fila),
+    });
+    if (!cuentasConocidas.has(normalizarTexto(fila.cuenta))) cuentasNuevas.add(fila.cuenta);
+    if (!conceptosConocidos.has(normalizarTexto(fila.concepto))) conceptosNuevos.add(fila.concepto);
+  }
+
+  return {
+    totalFilas: filas.length,
+    nuevas: nuevasFilas.length,
+    nuevasFilas,
+    yaCargadas,
+    saltadas,
+    conceptosNuevos: [...conceptosNuevos],
+    cuentasNuevas: [...cuentasNuevas],
+  };
+}
+
+export function ejecutarImportacionCaja(filas: FilaPlanillaCaja[]): { importados: number } {
+  const existentes = firmasExistentes();
+  let importados = 0;
+
+  withTransaction(() => {
+    for (const fila of filas) {
+      if (validarFila(fila)) continue;
+      const firma = firmaMovimiento(fila.fecha!, nombreEfectivo(fila), fila.cuenta, fila.importeNeto, fila.tipoMovimiento!);
+      if (existentes.has(firma)) continue;
+
+      const cuenta = getOrCrearCajaCuentaFlexible(fila.cuenta);
+      const concepto = getOrCrearCajaConceptoFlexible(fila.concepto);
+      crearCajaMovimiento({
+        fecha: fila.fecha!,
+        nombre: fila.nombre || concepto.nombre,
+        conceptoId: concepto.id,
+        cuentaId: cuenta.id,
+        correspondeA: fila.correspondeA || fila.fecha!.slice(0, 7),
+        tipoMovimiento: fila.tipoMovimiento!,
+        importeNeto: fila.importeNeto,
+        iva: fila.iva,
+        otrosConceptos: fila.otrosConceptos,
+        nota: fila.nota,
+      });
+      existentes.add(firma); // por si la planilla trae la misma fila duplicada dos veces
+      importados++;
+    }
+  });
+
+  return { importados };
 }
 
 export default db;
