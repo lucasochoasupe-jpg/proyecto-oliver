@@ -82,17 +82,14 @@ type Sock = ReturnType<typeof makeWASocket>;
 // matching aproximado). Chequea celular/vínculo de WhatsApp y pasa al paso
 // de tipo (entrada/salida).
 async function continuarConNombreValidado(
-  sock: Sock,
-  sendJid: string,
   phone: string,
   pendingAtt: AttendancePending,
-  nombreValido: string
+  nombreValido: string,
+  reply: (t: string) => Promise<void>
 ): Promise<void> {
   const empleado = getEmpleadoByNombre(nombreValido);
   if (!empleado) {
-    await sendSafe(sock, sendJid, {
-      text: `Hubo un problema para encontrarte en la nómina. Probá de nuevo o consultá con Administración.`,
-    });
+    await reply(`Hubo un problema para encontrarte en la nómina. Probá de nuevo o consultá con Administración.`);
     clearAttendance(phone);
     return;
   }
@@ -112,9 +109,7 @@ async function continuarConNombreValidado(
       sucursal_id: pendingAtt.sucursalId,
       motivo: "jid_no_autorizado",
     });
-    await sendSafe(sock, sendJid, {
-      text: `❌ Ese nombre ya está vinculado a otro número. Si lo querés cambiar, avisá a Administración.`,
-    });
+    await reply(`❌ Ese nombre ya está vinculado a otro número. Si lo querés cambiar, avisá a Administración.`);
     clearAttendance(phone);
     console.log(`[bot] [asistencia] JID no autorizado: ${phone} intentó marcar como ${nombreValido} (JID registrado: ${empleado.jid})`);
     return;
@@ -127,9 +122,7 @@ async function continuarConNombreValidado(
   const avisoCelular = celularRecienRegistrado
     ? "📱 Registramos este número como tu contacto para marcar asistencia.\n\n"
     : "";
-  await sendSafe(sock, sendJid, {
-    text: avisoCelular + preguntaTipoMsg(nombreValido, pendingAtt.sucursalNombre),
-  });
+  await reply(avisoCelular + preguntaTipoMsg(nombreValido, pendingAtt.sucursalNombre));
 }
 
 export async function handleIncoming(sock: Sock, msg: WAMessage): Promise<void> {
@@ -182,6 +175,13 @@ export async function handleIncoming(sock: Sock, msg: WAMessage): Promise<void> 
   // real" (liveLocationMessage) — WhatsApp las manda como tipos distintos, pero
   // ambas traen degreesLatitude/degreesLongitude con el mismo formato.
   if (tipo === "locationMessage" || tipo === "liveLocationMessage") {
+    const convoLoc = getOrCreateConversation(phone, pushName);
+    insertMessage(convoLoc.id, "user", "📍 Ubicación compartida");
+    const replyLoc = async (t: string): Promise<void> => {
+      insertMessage(convoLoc.id, "assistant", t);
+      await sendSafe(sock, sendJid, { text: t });
+    };
+
     const locMsg = msg.message?.locationMessage ?? msg.message?.liveLocationMessage;
     const pending = getAttendance(phone);
     if (locMsg && pending && pending.step === "location" && pending.tipo) {
@@ -199,14 +199,11 @@ export async function handleIncoming(sock: Sock, msg: WAMessage): Promise<void> 
           distancia_metros: null,
           motivo: "sucursal_sin_gps",
         });
-        await sendSafe(sock, sendJid, {
-          text: "La sucursal aún no tiene ubicación configurada. Consultá con Administración.",
-        });
+        await replyLoc("La sucursal aún no tiene ubicación configurada. Consultá con Administración.");
         console.log(`[bot] [asistencia] Rechazado (sucursal sin GPS): ${senderLabel} en ${pending.sucursalNombre} — intento guardado`);
       } else {
         const distancia = haversineMetros(lat, lon, branch.lat, branch.lon);
         if (distancia <= branch.radio_metros) {
-          getOrCreateConversation(phone, pushName);
           insertAsistencia(phone, pending.nombre ?? pushName ?? phone, pending.sucursalId, pending.tipo, lat, lon);
           const hora = new Date().toLocaleTimeString("es-AR", { timeZone: "America/Argentina/Buenos_Aires", hour: "2-digit", minute: "2-digit", hour12: false });
           const tipoStr = pending.tipo === "entrada" ? "Entrada" : "Salida";
@@ -214,9 +211,7 @@ export async function handleIncoming(sock: Sock, msg: WAMessage): Promise<void> 
             pending.tipo === "entrada"
               ? "¡Que tengas una buena jornada! 💪"
               : "¡Nos vemos! Que tengas un buen día. 👋";
-          await sendSafe(sock, sendJid, {
-            text: `✅ ${tipoStr} registrada en ${pending.sucursalNombre} — ${hora}\n${cierre}`,
-          });
+          await replyLoc(`✅ ${tipoStr} registrada en ${pending.sucursalNombre} — ${hora}\n${cierre}`);
           console.log(`[bot] [asistencia] ${pending.tipo} registrada: ${senderLabel} en ${pending.sucursalNombre}`);
         } else {
           insertAsistenciaRechazada({
@@ -229,17 +224,13 @@ export async function handleIncoming(sock: Sock, msg: WAMessage): Promise<void> 
             distancia_metros: Math.round(distancia),
             motivo: "fuera_de_rango",
           });
-          await sendSafe(sock, sendJid, {
-            text: `❌ No podemos registrar tu asistencia. Tu ubicación está a ${Math.round(distancia)}m de la sucursal ${pending.sucursalNombre} (máximo permitido: ${branch.radio_metros}m).\nPara volver a intentarlo, escaneá el QR de tu sucursal de nuevo.\n¡Saludos! 👋`,
-          });
+          await replyLoc(`❌ No podemos registrar tu asistencia. Tu ubicación está a ${Math.round(distancia)}m de la sucursal ${pending.sucursalNombre} (máximo permitido: ${branch.radio_metros}m).\nPara volver a intentarlo, escaneá el QR de tu sucursal de nuevo.\n¡Saludos! 👋`);
           console.log(`[bot] [asistencia] Rechazado: ${senderLabel} a ${Math.round(distancia)}m de ${pending.sucursalNombre} — intento guardado`);
         }
       }
       clearAttendance(phone);
     } else {
-      await sendSafe(sock, sendJid, {
-        text: "Tu sesión para marcar asistencia expiró (o no la iniciaste). Escaneá el QR de tu sucursal de nuevo para volver a intentarlo.\n¡Saludos! 👋",
-      });
+      await replyLoc("Tu sesión para marcar asistencia expiró (o no la iniciaste). Escaneá el QR de tu sucursal de nuevo para volver a intentarlo.\n¡Saludos! 👋");
       console.log(`[bot] [asistencia] Ubicación sin flujo pendiente (expirado): ${senderLabel}`);
     }
     return;
@@ -272,30 +263,35 @@ export async function handleIncoming(sock: Sock, msg: WAMessage): Promise<void> 
 
   console.log(`[bot] <- Mensaje de ${senderLabel}: "${text}"`);
 
+  const convo = getOrCreateConversation(phone, pushName);
+  insertMessage(convo.id, "user", text);
+  const reply = async (t: string): Promise<void> => {
+    insertMessage(convo.id, "assistant", t);
+    await sendSafe(sock, sendJid, { text: t });
+  };
+
   // ── Asistencia: flujo por pasos ───────────────────────────────────────────
   const pendingAtt = getAttendance(phone);
 
   if (pendingAtt && pendingAtt.step === "nombre") {
     if (text.trim().toLowerCase() === "cancelar") {
       clearAttendance(phone);
-      await sendSafe(sock, sendJid, { text: "Marcado de asistencia cancelado.\n¡Saludos! 👋" });
+      await reply("Marcado de asistencia cancelado.\n¡Saludos! 👋");
       return;
     }
     const nombreValido = validarEmpleadoDB(text.trim());
     if (nombreValido) {
-      await continuarConNombreValidado(sock, sendJid, phone, pendingAtt, nombreValido);
+      await continuarConNombreValidado(phone, pendingAtt, nombreValido, reply);
       return;
     }
     // No matcheó exacto/subset — probar si se parece a alguien (typo) antes de rechazar.
     const candidato = buscarEmpleadoParecido(text.trim());
     if (candidato) {
       setAttendance(phone, { ...pendingAtt, step: "confirmarNombre", candidato });
-      await sendSafe(sock, sendJid, {
-        text: `¿Sos *${candidato}*? Respondé *sí* o *no*.`,
-      });
+      await reply(`¿Sos *${candidato}*? Respondé *sí* o *no*.`);
       return;
     }
-    await sendSafe(sock, sendJid, { text: NOMBRE_NO_ENCONTRADO_MSG });
+    await reply(NOMBRE_NO_ENCONTRADO_MSG);
     return;
   }
 
@@ -303,21 +299,19 @@ export async function handleIncoming(sock: Sock, msg: WAMessage): Promise<void> 
     const t = text.trim().toLowerCase();
     if (t === "cancelar") {
       clearAttendance(phone);
-      await sendSafe(sock, sendJid, { text: "Marcado de asistencia cancelado.\n¡Saludos! 👋" });
+      await reply("Marcado de asistencia cancelado.\n¡Saludos! 👋");
       return;
     }
     if (t === "si" || t === "sí" || t === "s") {
-      await continuarConNombreValidado(sock, sendJid, phone, pendingAtt, pendingAtt.candidato);
+      await continuarConNombreValidado(phone, pendingAtt, pendingAtt.candidato, reply);
       return;
     }
     if (t === "no" || t === "n") {
       setAttendance(phone, { ...pendingAtt, step: "nombre", candidato: undefined });
-      await sendSafe(sock, sendJid, { text: NOMBRE_NO_ENCONTRADO_MSG });
+      await reply(NOMBRE_NO_ENCONTRADO_MSG);
       return;
     }
-    await sendSafe(sock, sendJid, {
-      text: `Respondé *sí* o *no*: ¿sos *${pendingAtt.candidato}*?`,
-    });
+    await reply(`Respondé *sí* o *no*: ¿sos *${pendingAtt.candidato}*?`);
     return;
   }
 
@@ -325,23 +319,17 @@ export async function handleIncoming(sock: Sock, msg: WAMessage): Promise<void> 
     const t = text.trim().toLowerCase();
     if (t === "cancelar") {
       clearAttendance(phone);
-      await sendSafe(sock, sendJid, { text: "Marcado de asistencia cancelado.\n¡Saludos! 👋" });
+      await reply("Marcado de asistencia cancelado.\n¡Saludos! 👋");
       return;
     }
     if (t === "1" || t === "entrada") {
       setAttendance(phone, { ...pendingAtt, step: "location", tipo: "entrada" });
-      await sendSafe(sock, sendJid, {
-        text: "Compartí tu ubicación actual para registrar tu *entrada*. 📍\n\nTocá el clip (📎) → Ubicación → Enviar ubicación actual.\n\nO escribí \"cancelar\" para salir.",
-      });
+      await reply("Compartí tu ubicación actual para registrar tu *entrada*. 📍\n\nTocá el clip (📎) → Ubicación → Enviar ubicación actual.\n\nO escribí \"cancelar\" para salir.");
     } else if (t === "2" || t === "salida") {
       setAttendance(phone, { ...pendingAtt, step: "location", tipo: "salida" });
-      await sendSafe(sock, sendJid, {
-        text: "Compartí tu ubicación actual para registrar tu *salida*. 📍\n\nTocá el clip (📎) → Ubicación → Enviar ubicación actual.\n\nO escribí \"cancelar\" para salir.",
-      });
+      await reply("Compartí tu ubicación actual para registrar tu *salida*. 📍\n\nTocá el clip (📎) → Ubicación → Enviar ubicación actual.\n\nO escribí \"cancelar\" para salir.");
     } else {
-      await sendSafe(sock, sendJid, {
-        text: `¿Qué vas a marcar en ${pendingAtt.sucursalNombre}?\n* [1] Entrada\n* [2] Salida\n\nO escribí "cancelar" para salir.`,
-      });
+      await reply(`¿Qué vas a marcar en ${pendingAtt.sucursalNombre}?\n* [1] Entrada\n* [2] Salida\n\nO escribí "cancelar" para salir.`);
     }
     return;
   }
@@ -352,9 +340,7 @@ export async function handleIncoming(sock: Sock, msg: WAMessage): Promise<void> 
     const nombreBuscado = marcarMatch[1].trim();
     const branch = getSucursalByNombre(nombreBuscado);
     if (!branch) {
-      await sendSafe(sock, sendJid, {
-        text: `No se encontró la sucursal "${nombreBuscado}". Escaneá el QR de tu sucursal.`,
-      });
+      await reply(`No se encontró la sucursal "${nombreBuscado}". Escaneá el QR de tu sucursal.`);
     } else {
       clearRRHH(phone); // por si venía de una charla RRHH a medio hacer
       const empleadoVinculado = getEmpleadoByJid(phone);
@@ -363,21 +349,14 @@ export async function handleIncoming(sock: Sock, msg: WAMessage): Promise<void> 
         // pedirle el nombre cada vez, el vínculo teléfono↔empleado ya es la
         // verificación real (ver conversación sobre esto).
         setAttendance(phone, { sucursalId: branch.id, sucursalNombre: branch.nombre, step: "tipo", nombre: empleadoVinculado.nombre });
-        await sendSafe(sock, sendJid, {
-          text: preguntaTipoMsg(empleadoVinculado.nombre, branch.nombre),
-        });
+        await reply(preguntaTipoMsg(empleadoVinculado.nombre, branch.nombre));
       } else {
         setAttendance(phone, { sucursalId: branch.id, sucursalNombre: branch.nombre, step: "nombre" });
-        await sendSafe(sock, sendJid, {
-          text: `Hola! Para registrar tu asistencia en ${branch.nombre}, escribí tu *Nombre y Apellido*:`,
-        });
+        await reply(`Hola! Para registrar tu asistencia en ${branch.nombre}, escribí tu *Nombre y Apellido*:`);
       }
     }
     return;
   }
-
-  const convo = getOrCreateConversation(phone, pushName);
-  insertMessage(convo.id, "user", text);
 
   const fresh = getConversationById(convo.id);
   if (!fresh || fresh.mode !== "AI") {

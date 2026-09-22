@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import QRScreen from "./QRScreen";
 import DashboardHeader from "./DashboardHeader";
 import ConversationList from "./ConversationList";
@@ -19,12 +20,24 @@ interface Conversation {
 type AppStatus = "loading" | "qr" | "connected";
 
 export default function ConnectionGate() {
+  const searchParams = useSearchParams();
   const [appStatus, setAppStatus] = useState<AppStatus>("loading");
   const [phone, setPhone] = useState("");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
   useSidebarHidden(appStatus !== "connected");
+
+  // Permite abrir un chat puntual desde otra pantalla (ej. Asistencia →
+  // "Ver chat" en un intento rechazado o una marcación pendiente) via
+  // /?conversation=<id>. Solo se aplica una vez al conectar, no en cada poll.
+  useEffect(() => {
+    if (appStatus !== "connected") return;
+    const raw = searchParams.get("conversation");
+    const id = raw ? Number(raw) : null;
+    if (id) setSelectedId(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appStatus]);
 
   const checkStatus = useCallback(async () => {
     try {

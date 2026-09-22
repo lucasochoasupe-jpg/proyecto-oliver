@@ -385,6 +385,22 @@ try { db.exec("ALTER TABLE turno_templates ADD COLUMN tolerancia_min INTEGER"); 
 try { db.exec("ALTER TABLE horarios_empleado ADD COLUMN tolerancia_min INTEGER"); } catch {}
 try { db.exec("ALTER TABLE legajo_archivos ADD COLUMN etiqueta TEXT"); } catch {}
 
+// Sincroniza el nombre mostrado en el panel de chats con la nómina: si el
+// teléfono de una conversación está vinculado a un empleado (empleados.jid),
+// mostramos su nombre real en vez del nombre de WhatsApp o el número crudo.
+// Se corre en cada arranque para cubrir vínculos hechos antes de este cambio;
+// de acá en más también se mantiene al día en cada mensaje nuevo (ver
+// getOrCreateConversation).
+try {
+  db.exec(`
+    UPDATE conversations
+    SET name = (SELECT e.nombre FROM empleados e WHERE e.jid = conversations.phone AND e.activo = 1)
+    WHERE phone IN (SELECT jid FROM empleados WHERE jid IS NOT NULL AND activo = 1)
+  `);
+} catch (err) {
+  console.error("[db] Error sincronizando nombres de conversaciones con empleados:", err);
+}
+
 // Migración: sucursal_id se creó NOT NULL (los turnos comparaban sucursal
 // contra la marcación real). Ahora la comparación es solo empleado + día +
 // hora, sin importar dónde marcó — sucursal_id queda opcional. Tabla chica,
@@ -516,12 +532,18 @@ export function getOrCreateConversation(
   phone: string,
   name?: string | null
 ): Conversation {
+  // El nombre de la nómina (empleado vinculado por WhatsApp) siempre tiene
+  // prioridad sobre el nombre de WhatsApp (pushName) o el número — así el
+  // panel de chats muestra a la persona real, no como se puso el contacto.
+  const empleado = getEmpleadoByJid(phone);
+  const preferredName = empleado?.nombre ?? name ?? null;
+
   let conv = stmtGetConvByPhone.get(phone) as unknown as Conversation | undefined;
   if (!conv) {
-    conv = stmtInsertConv.get(phone, name ?? null) as unknown as Conversation;
-  } else if (name && name !== conv.name) {
-    stmtUpdateName.run(name, conv.id);
-    conv = { ...conv, name };
+    conv = stmtInsertConv.get(phone, preferredName) as unknown as Conversation;
+  } else if (preferredName && preferredName !== conv.name) {
+    stmtUpdateName.run(preferredName, conv.id);
+    conv = { ...conv, name: preferredName };
   }
   return conv;
 }
@@ -1703,6 +1725,7 @@ export interface AsistenciaRechazada {
   motivo: string;
   resuelto: number;
   created_at: number;
+  conversation_id: number | null;
 }
 
 export function insertAsistenciaRechazada(params: {
@@ -1733,9 +1756,10 @@ export function insertAsistenciaRechazada(params: {
 
 export function listAsistenciaRechazada(soloPendientes = true): AsistenciaRechazada[] {
   let query = `
-    SELECT r.*, s.nombre AS sucursal_nombre
+    SELECT r.*, s.nombre AS sucursal_nombre, c.id AS conversation_id
     FROM asistencia_rechazada r
     LEFT JOIN sucursales s ON s.id = r.sucursal_id
+    LEFT JOIN conversations c ON c.phone = r.phone
   `;
   if (soloPendientes) query += " WHERE r.resuelto = 0";
   query += " ORDER BY r.created_at DESC LIMIT 200";
@@ -1782,7 +1806,10 @@ export interface AttendancePendiente {
   nombre: string | null;
   tipo: "entrada" | "salida" | null;
   updated_at: number;
+  conversation_id: number | null;
 }
+
+const stmtConvIdByPhone = db.prepare("SELECT id FROM conversations WHERE phone = ?");
 
 export function listAttendancePendientes(): AttendancePendiente[] {
   const rows = db
@@ -1795,6 +1822,7 @@ export function listAttendancePendientes(): AttendancePendiente[] {
     } catch {
       // ignorar filas corruptas
     }
+    const conv = stmtConvIdByPhone.get(r.phone) as { id: number } | undefined;
     return {
       phone: r.phone,
       step: (parsed.step as AttendancePendiente["step"]) ?? "nombre",
@@ -1802,6 +1830,7 @@ export function listAttendancePendientes(): AttendancePendiente[] {
       nombre: parsed.nombre ?? null,
       tipo: parsed.tipo ?? null,
       updated_at: r.updated_at,
+      conversation_id: conv?.id ?? null,
     };
   });
 }

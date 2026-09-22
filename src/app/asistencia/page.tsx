@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useState, useCallback, useMemo } from "react";
+import Link from "next/link";
 import type { AsistenciaRecord, CumplimientoRow, AusenciaRow } from "@/lib/db";
 import PageHeader from "@/components/PageHeader";
 import EmpleadoMultiSelect from "@/components/EmpleadoMultiSelect";
@@ -44,6 +45,7 @@ interface AsistenciaRechazada {
   motivo: string;
   resuelto: number;
   created_at: number;
+  conversation_id: number | null;
 }
 
 interface AttendancePendiente {
@@ -53,6 +55,19 @@ interface AttendancePendiente {
   nombre: string | null;
   tipo: "entrada" | "salida" | null;
   updated_at: number;
+  conversation_id: number | null;
+}
+
+function VerChatButton({ conversationId }: { conversationId: number | null }) {
+  if (!conversationId) return null;
+  return (
+    <Link
+      href={`/?conversation=${conversationId}`}
+      className="text-xs font-medium text-[#D4A843] hover:text-[#2C1810] underline"
+    >
+      Ver chat
+    </Link>
+  );
 }
 
 const SUCURSALES = ["Todas", "Fraga", "Campbell", "Mendoza", "Avenida", "Donado", "Montevideo", "Terminal"];
@@ -556,6 +571,9 @@ export default function AsistenciaPage() {
                         {formatFecha(r.created_at)} {formatHora(r.created_at)}
                       </td>
                       <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                        <span className="mr-2">
+                          <VerChatButton conversationId={r.conversation_id} />
+                        </span>
                         {puedeAprobar && (
                           <button
                             onClick={() => resolverRechazo(r.id, "aprobar")}
@@ -610,7 +628,10 @@ export default function AsistenciaPage() {
                     <td className="px-4 py-2.5" data-label="Tipo">{p.tipo ? <BadgeTipo tipo={p.tipo} /> : <span className="italic text-[#B89070] text-xs">—</span>}</td>
                     <td className="px-4 py-2.5 text-[#8B6347]" data-label="Quedó en">{stepLabel(p.step)}</td>
                     <td className="px-4 py-2.5 text-[#8B6347] whitespace-nowrap" data-label="Última actividad">{haceLabel(p.updated_at)}</td>
-                    <td className="px-4 py-2.5 text-right">
+                    <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                      <span className="mr-2">
+                        <VerChatButton conversationId={p.conversation_id} />
+                      </span>
                       <button
                         onClick={() => descartarPendiente(p.phone)}
                         disabled={procesandoPendiente === p.phone}
