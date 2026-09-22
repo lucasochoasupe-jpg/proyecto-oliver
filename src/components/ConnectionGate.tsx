@@ -19,12 +19,21 @@ interface Conversation {
 
 type AppStatus = "loading" | "qr" | "connected";
 
+// Sin distinguir mayúsculas/tildes, para que "garcia" encuentre "García".
+function normalizar(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase();
+}
+
 export default function ConnectionGate() {
   const searchParams = useSearchParams();
   const [appStatus, setAppStatus] = useState<AppStatus>("loading");
   const [phone, setPhone] = useState("");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [busqueda, setBusqueda] = useState("");
 
   useSidebarHidden(appStatus !== "connected");
 
@@ -107,22 +116,50 @@ export default function ConnectionGate() {
     return <QRScreen onConnected={handleConnected} />;
   }
 
+  const busquedaNorm = normalizar(busqueda.trim());
+  const conversacionesFiltradas = busquedaNorm
+    ? conversations.filter((c) => normalizar(c.name ?? c.phone).includes(busquedaNorm))
+    : conversations;
+
   return (
     <div className="flex flex-col h-screen">
       <DashboardHeader phone={phone} onDisconnect={handleDisconnect} />
       <div className="flex flex-1 overflow-hidden min-h-0">
         {/* Lista de conversaciones */}
         <aside className="w-80 shrink-0 border-r border-[#EDE0CC] bg-white flex flex-col">
-          <div className="px-4 py-3 border-b border-[#EDE0CC]">
+          <div className="px-4 py-3 border-b border-[#EDE0CC] space-y-2">
             <h2 className="text-xs font-bold text-[#8B6347] uppercase tracking-widest">
               Conversaciones
             </h2>
+            <div className="relative">
+              <input
+                type="text"
+                value={busqueda}
+                onChange={(e) => setBusqueda(e.target.value)}
+                placeholder="Buscar por nombre..."
+                className="w-full border border-[#EDE0CC] rounded-lg pl-3 pr-7 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] bg-[#FBF6EE]"
+              />
+              {busqueda && (
+                <button
+                  onClick={() => setBusqueda("")}
+                  aria-label="Limpiar búsqueda"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-[#B89070] hover:text-[#2C1810] text-sm leading-none"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
           </div>
           <div className="flex-1 overflow-hidden">
             <ConversationList
-              conversations={conversations}
+              conversations={conversacionesFiltradas}
               selectedId={selectedId}
               onSelect={setSelectedId}
+              emptyMessage={
+                busquedaNorm
+                  ? { title: "Sin resultados", subtitle: `No hay conversaciones con "${busqueda.trim()}".` }
+                  : undefined
+              }
             />
           </div>
         </aside>

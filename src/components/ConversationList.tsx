@@ -13,6 +13,7 @@ interface Props {
   conversations: Conversation[];
   selectedId: number | null;
   onSelect: (id: number) => void;
+  emptyMessage?: { title: string; subtitle?: string };
 }
 
 function relativeTime(ts: number | null): string {
@@ -24,12 +25,14 @@ function relativeTime(ts: number | null): string {
   return `hace ${Math.floor(diff / 86400)} d`;
 }
 
-export default function ConversationList({ conversations, selectedId, onSelect }: Props) {
+export default function ConversationList({ conversations, selectedId, onSelect, emptyMessage }: Props) {
   if (conversations.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-[#8B6347] text-sm p-6 text-center">
-        <p className="font-medium">Sin conversaciones</p>
-        <p className="mt-1 text-xs opacity-70">Cuando alguien te escriba al WhatsApp aparecerá aquí.</p>
+        <p className="font-medium">{emptyMessage?.title ?? "Sin conversaciones"}</p>
+        <p className="mt-1 text-xs opacity-70">
+          {emptyMessage?.subtitle ?? "Cuando alguien te escriba al WhatsApp aparecerá aquí."}
+        </p>
       </div>
     );
   }
