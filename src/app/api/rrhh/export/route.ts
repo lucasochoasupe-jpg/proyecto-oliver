@@ -1,115 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import ExcelJS from "exceljs";
-import db, { listAusenciasManuales } from "@/lib/db";
 import { COLOR, fill, zebraFill, configurarColumnas, estilarHeader, aplicarGrilla, estilarFilaTotal, agregarBranding, ajustarAnchoContenido } from "@/lib/excel-style";
-
-function formatFechaCorta(iso: string): string {
-  return new Date(`${iso}T00:00:00Z`).toLocaleDateString("es-AR", { timeZone: "UTC", day: "2-digit", month: "2-digit", year: "numeric" });
-}
+import { listarRegistrosRRHH } from "@/lib/rrhh-registros";
+import { ESTADO_LABEL, filtrarRegistros, paramsAFiltros, rangoTexto } from "@/lib/rrhh-shared";
 
 export const dynamic = "force-dynamic";
 
-function clasificarMotivo(motivo: string): string {
-  const m = motivo.toLowerCase();
-  if (m.includes("urgencia")) return "Urgencia";
-  if (m.includes("vacaciones") || m.includes("licencia")) return "Vacaciones";
-  if (m.includes("enfermedad")) return "Enfermedad";
-  if (m.includes("personal")) return "Motivo Personal";
-  return "Otro";
-}
-
-function parseAdminBlock(content: string) {
-  const tagMatch = content.match(/<ADMIN>([\s\S]*?)<\/ADMIN>/i);
-  const raw = tagMatch
-    ? tagMatch[1].trim()
-    : (() => {
-        const bare = content.match(/Aviso de Sanca:[\s\S]*?(?=\n\n|\n✅|\nAvisé|$)/i);
-        return bare ? bare[0].trim() : null;
-      })();
-
-  if (!raw) return null;
-  const nombreMatch = raw.match(/Aviso de Sanca:\s*(.+?)\s+de sucursal/i);
-  const sucursalMatch = raw.match(/de sucursal\s+(.+?)\s+comunica/i);
-  const motivoMatch = raw.match(/comunica\s+(.+?)\.\s+Detalle:/i);
-  const detalleMatch = raw.match(/Detalle:\s*([\s\S]+?)(?:\.\s*Contacto:|Contacto:|$)/i);
-  const contactoMatch = raw.match(/Contacto:\s*(.+?)$/im);
-  return {
-    nombre: nombreMatch?.[1]?.trim() ?? "Desconocido",
-    sucursal: sucursalMatch?.[1]?.trim() ?? "Desconocida",
-    motivo: motivoMatch?.[1]?.trim() ?? "Sin especificar",
-    detalle: detalleMatch?.[1]?.trim().replace(/\.$/, "") ?? raw,
-    contacto: contactoMatch?.[1]?.trim() ?? "—",
-    certificadoPendiente: raw.includes("CERTIFICADO PENDIENTE"),
-  };
-}
-
+// Mismos registros y mismos filtros que el panel (ver rrhh-shared.ts) — el
+// Excel sale igual a lo que se está viendo en pantalla.
 export async function GET(req: NextRequest) {
-  const { searchParams } = req.nextUrl;
-  const sucursal = searchParams.get("sucursal") ?? "Todas";
-  const motivo = searchParams.get("motivo") ?? "Todos";
-  const fecha = searchParams.get("fecha") ?? "";
-  const soloCert = searchParams.get("cert") === "1";
-
-  const rows = db
-    .prepare(
-      `SELECT m.id, m.content, m.created_at, c.phone
-       FROM messages m
-       JOIN conversations c ON c.id = m.conversation_id
-       WHERE m.role = 'assistant' AND (m.content LIKE '%<ADMIN>%' OR m.content LIKE '%Aviso de Sanca:%')
-       ORDER BY m.created_at DESC`
-    )
-    .all() as { id: number; content: string; created_at: number; phone: string }[];
-
-  type FilaAusencia = {
-    id: number;
-    phone: string;
-    fecha: number;
-    nombre: string;
-    sucursal: string;
-    motivo: string;
-    detalle: string;
-    contacto: string;
-    certificadoPendiente: boolean;
-  };
-
-  const manuales: FilaAusencia[] = listAusenciasManuales().map((a) => {
-    const rango =
-      a.fecha_inicio === a.fecha_fin
-        ? ` el ${formatFechaCorta(a.fecha_inicio)}`
-        : ` del ${formatFechaCorta(a.fecha_inicio)} al ${formatFechaCorta(a.fecha_fin)}`;
-    return {
-      id: -a.id,
-      phone: a.phone ?? "",
-      fecha: a.created_at,
-      nombre: a.empleado_nombre,
-      sucursal: a.sucursal ?? "—",
-      motivo: `${a.categoria}${rango}`,
-      detalle: a.nota || "Cargado manualmente por administración",
-      contacto: a.phone || "—",
-      certificadoPendiente: a.categoria === "Enfermedad" && !!a.certificado_pendiente,
-    };
-  });
-
-  const desdeMensajes: FilaAusencia[] = rows
-    .map((r): FilaAusencia | null => {
-      const p = parseAdminBlock(r.content);
-      if (!p) return null;
-      return { id: r.id, phone: r.phone, fecha: r.created_at, ...p };
-    })
-    .filter((a): a is FilaAusencia => a !== null);
-
-  const ausencias = desdeMensajes.concat(manuales).filter((a) => {
-    if (sucursal !== "Todas" && a.sucursal !== sucursal) return false;
-    if (motivo !== "Todos" && clasificarMotivo(a.motivo) !== motivo) return false;
-    if (soloCert && !a.certificadoPendiente) return false;
-    if (fecha) {
-      const d = new Date(a.fecha * 1000);
-      const isoDay = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      if (isoDay !== fecha) return false;
-    }
-    return true;
-  });
-  ausencias.sort((a, b) => b.fecha - a.fecha);
+  const ausencias = filtrarRegistros(listarRegistrosRRHH(), paramsAFiltros(req.nextUrl.searchParams));
 
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Sanca RRHH";
@@ -123,9 +23,11 @@ export async function GET(req: NextRequest) {
     { header: "Sucursal",              key: "sucursal",             width: 16 },
     { header: "Tipo",                  key: "tipo",                 width: 18 },
     { header: "Motivo",                key: "motivo",               width: 30 },
-    { header: "Fecha",                 key: "fecha",                width: 14 },
+    { header: "Días de ausencia",      key: "rango",                width: 24 },
+    { header: "Estado",                key: "estado",               width: 16 },
+    { header: "Fecha aviso",           key: "fecha",                width: 14 },
     { header: "Hora",                  key: "hora",                 width: 10 },
-    { header: "Cert. Pendiente",       key: "cert",                 width: 16 },
+    { header: "Certificado",           key: "cert",                 width: 16 },
     { header: "Detalle",               key: "detalle",              width: 50 },
     { header: "Contacto",              key: "contacto",             width: 36 },
   ];
@@ -140,11 +42,13 @@ export async function GET(req: NextRequest) {
     const row = ws.addRow({
       nombre:   a.nombre,
       sucursal: a.sucursal,
-      tipo:     clasificarMotivo(a.motivo),
+      tipo:     a.tipo,
       motivo:   a.motivo,
+      rango:    rangoTexto(a) ?? "—",
+      estado:   a.estado ? ESTADO_LABEL[a.estado] : "—",
       fecha:    fechaStr,
       hora:     horaStr,
-      cert:     a.certificadoPendiente ? "⚠ Pendiente" : "—",
+      cert:     a.certificadoPendiente ? "⚠ Pendiente" : a.certificadoRecibidoEn ? "Recibido" : "—",
       detalle:  a.detalle,
       contacto: a.contacto,
     });

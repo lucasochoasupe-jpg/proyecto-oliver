@@ -385,6 +385,29 @@ try { db.exec("ALTER TABLE turno_templates ADD COLUMN tolerancia_min INTEGER"); 
 try { db.exec("ALTER TABLE horarios_empleado ADD COLUMN tolerancia_min INTEGER"); } catch {}
 try { db.exec("ALTER TABLE legajo_archivos ADD COLUMN etiqueta TEXT"); } catch {}
 
+// Aprobación de pedidos de RRHH (ver [[decidirAusenciaReportada]]). Solo
+// Vacaciones y Enfermedad se aprueban/rechazan; Motivo Personal es
+// 'informativo' (explica la falta pero no la justifica). El backfill corre
+// una sola vez — cuando la columna se crea — y deja todo lo histórico como
+// 'aprobado' para no cambiar liquidaciones ya hechas (salvo Motivo Personal).
+try {
+  db.exec("ALTER TABLE ausencias_reportadas ADD COLUMN estado TEXT");
+  db.exec(
+    "UPDATE ausencias_reportadas SET estado = CASE WHEN categoria = 'Motivo Personal' THEN 'informativo' ELSE 'aprobado' END"
+  );
+} catch {}
+try { db.exec("ALTER TABLE ausencias_reportadas ADD COLUMN resuelto_at INTEGER"); } catch {}
+try { db.exec("ALTER TABLE ausencias_reportadas ADD COLUMN respuesta TEXT"); } catch {}
+
+// Avisos del bot que se sacaron del panel de RRHH. El mensaje original queda
+// en el chat (no se borra de `messages`), solo deja de listarse en el panel.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS rrhh_avisos_ocultos (
+    message_id INTEGER PRIMARY KEY,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+`);
+
 // Sincroniza el nombre mostrado en el panel de chats con la nómina: si el
 // teléfono de una conversación está vinculado a un empleado (empleados.jid),
 // mostramos su nombre real en vez del nombre de WhatsApp o el número crudo.
@@ -800,7 +823,18 @@ export function resolverCertificadoPendientePorId(id: number): CertificadoPendie
 // un rango de fechas para un aviso de Enfermedad / Motivo Personal /
 // Vacaciones (Urgencia no tiene rango de fechas, no genera registro acá). La
 // liquidación de sueldos (calcularAusencias) usa esto para no descontar como
-// ausencia injustificada un día que el empleado sí avisó.
+// ausencia injustificada un día que el empleado sí avisó — pero solo si el
+// pedido quedó 'aprobado' (ver [[decidirAusenciaReportada]]).
+
+// pendiente/aprobado/rechazado: Vacaciones y Enfermedad (RRHH decide).
+// informativo: Motivo Personal — explica la falta, nunca la justifica.
+export type EstadoAusencia = "pendiente" | "aprobado" | "rechazado" | "informativo";
+
+export const CATEGORIAS_CON_APROBACION = ["Vacaciones", "Enfermedad"] as const;
+
+export function requiereAprobacion(categoria: string): boolean {
+  return (CATEGORIAS_CON_APROBACION as readonly string[]).includes(categoria);
+}
 
 export interface AusenciaReportada {
   id: number;
@@ -813,6 +847,9 @@ export interface AusenciaReportada {
   sucursal: string | null;
   nota: string | null;
   admin_message_id: number | null;
+  estado: EstadoAusencia;
+  resuelto_at: number | null;
+  respuesta: string | null; // comentario de RRHH al aprobar/rechazar
   created_at: number;
 }
 
@@ -826,12 +863,16 @@ export function crearAusenciaReportada(data: {
   adminMessageId: number | null;
   sucursal?: string | null;
   nota?: string | null;
+  // Por defecto: 'pendiente' si la categoría se aprueba, 'informativo' si no.
+  // Las cargas manuales del admin lo pasan explícito.
+  estado?: EstadoAusencia;
 }): number {
+  const estado = data.estado ?? (requiereAprobacion(data.categoria) ? "pendiente" : "informativo");
   const info = db
     .prepare(
       `INSERT INTO ausencias_reportadas
-         (empleado_nombre, categoria, fecha_inicio, fecha_fin, certificado_pendiente, phone, admin_message_id, sucursal, nota)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (empleado_nombre, categoria, fecha_inicio, fecha_fin, certificado_pendiente, phone, admin_message_id, sucursal, nota, estado, resuelto_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       data.empleadoNombre,
@@ -842,7 +883,9 @@ export function crearAusenciaReportada(data: {
       data.phone,
       data.adminMessageId,
       data.sucursal ?? null,
-      data.nota ?? null
+      data.nota ?? null,
+      estado,
+      estado === "aprobado" || estado === "rechazado" ? Math.floor(Date.now() / 1000) : null
     );
   return Number(info.lastInsertRowid);
 }
@@ -858,6 +901,57 @@ export function listAusenciasManuales(): AusenciaReportada[] {
     .all() as unknown as AusenciaReportada[];
 }
 
+// Registros estructurados de los avisos del bot, por id del mensaje a admin.
+export function listAusenciasPorAdminMessageIds(messageIds: number[]): Map<number, AusenciaReportada> {
+  const map = new Map<number, AusenciaReportada>();
+  if (messageIds.length === 0) return map;
+  const placeholders = messageIds.map(() => "?").join(", ");
+  const rows = db
+    .prepare(`SELECT * FROM ausencias_reportadas WHERE admin_message_id IN (${placeholders})`)
+    .all(...messageIds) as unknown as AusenciaReportada[];
+  for (const r of rows) map.set(r.admin_message_id as number, r);
+  return map;
+}
+
+export function getAusenciaReportada(id: number): AusenciaReportada | null {
+  return (db.prepare("SELECT * FROM ausencias_reportadas WHERE id = ?").get(id) as unknown as AusenciaReportada | undefined) ?? null;
+}
+
+export function getAusenciaReportadaPorAdminMessageId(messageId: number): AusenciaReportada | null {
+  return (
+    (db.prepare("SELECT * FROM ausencias_reportadas WHERE admin_message_id = ?").get(messageId) as unknown as
+      | AusenciaReportada
+      | undefined) ?? null
+  );
+}
+
+// Aprueba o rechaza un pedido. Aprobar una Enfermedad equivale a dar por
+// recibido el certificado (aunque lo haya traído en papel): se baja la marca
+// de pendiente y se cierra el certificados_pendientes del aviso, así el bot
+// deja de ofrecerle "[4] Entregar certificado pendiente" por ese aviso.
+export function decidirAusenciaReportada(
+  id: number,
+  decision: "aprobado" | "rechazado",
+  respuesta: string | null
+): AusenciaReportada | null {
+  const row = getAusenciaReportada(id);
+  if (!row || !requiereAprobacion(row.categoria)) return null;
+  withTransaction(() => {
+    db.prepare(
+      "UPDATE ausencias_reportadas SET estado = ?, respuesta = ?, resuelto_at = unixepoch() WHERE id = ?"
+    ).run(decision, respuesta, id);
+    if (decision === "aprobado" && row.categoria === "Enfermedad") {
+      db.prepare("UPDATE ausencias_reportadas SET certificado_pendiente = 0 WHERE id = ?").run(id);
+      if (row.admin_message_id !== null) {
+        db.prepare(
+          "UPDATE certificados_pendientes SET resuelto = 1, resuelto_at = unixepoch() WHERE admin_message_id = ? AND resuelto = 0"
+        ).run(row.admin_message_id);
+      }
+    }
+  });
+  return getAusenciaReportada(id);
+}
+
 export function eliminarAusenciaReportadaManual(id: number): boolean {
   const info = db.prepare("DELETE FROM ausencias_reportadas WHERE id = ? AND admin_message_id IS NULL").run(id);
   return info.changes > 0;
@@ -869,17 +963,20 @@ export function eliminarAusenciasReportadasManuales(ids: number[]): void {
   db.prepare(`DELETE FROM ausencias_reportadas WHERE id IN (${placeholders}) AND admin_message_id IS NULL`).run(...ids);
 }
 
-// Borra un aviso que vino del bot: además del mensaje en `messages`, hay que
-// borrar la fila de `ausencias_reportadas` (y desvincular certificados_pendientes)
-// que lo referencian por admin_message_id — si no, la FK impide borrar el
-// mensaje y el registro queda "atascado" en el panel de RRHH.
+export function listAvisosOcultos(): Set<number> {
+  const rows = db.prepare("SELECT message_id FROM rrhh_avisos_ocultos").all() as { message_id: number }[];
+  return new Set(rows.map((r) => r.message_id));
+}
+
+// Saca un aviso del bot del panel de RRHH. El mensaje queda en el chat (ya no
+// se borra de `messages`); se borra su fila de `ausencias_reportadas` — esos
+// días dejan de estar justificados en la liquidación — y se cierra el
+// certificado pendiente del aviso, para que el bot no le siga pidiendo uno.
 export function eliminarAvisoBot(messageId: number): boolean {
-  return withTransaction(() => {
-    db.prepare("DELETE FROM ausencias_reportadas WHERE admin_message_id = ?").run(messageId);
-    db.prepare("UPDATE certificados_pendientes SET admin_message_id = NULL WHERE admin_message_id = ?").run(messageId);
-    const info = db.prepare("DELETE FROM messages WHERE id = ? AND role = 'assistant'").run(messageId);
-    return info.changes > 0;
-  });
+  const existe = db.prepare("SELECT 1 FROM messages WHERE id = ? AND role = 'assistant'").get(messageId);
+  if (!existe) return false;
+  eliminarAvisosBotMany([messageId]);
+  return true;
 }
 
 export function eliminarAvisosBotMany(messageIds: number[]): void {
@@ -887,17 +984,20 @@ export function eliminarAvisosBotMany(messageIds: number[]): void {
   withTransaction(() => {
     const placeholders = messageIds.map(() => "?").join(", ");
     db.prepare(`DELETE FROM ausencias_reportadas WHERE admin_message_id IN (${placeholders})`).run(...messageIds);
-    db.prepare(`UPDATE certificados_pendientes SET admin_message_id = NULL WHERE admin_message_id IN (${placeholders})`).run(...messageIds);
-    db.prepare(`DELETE FROM messages WHERE id IN (${placeholders}) AND role = 'assistant'`).run(...messageIds);
+    db.prepare(
+      `UPDATE certificados_pendientes SET resuelto = 1, resuelto_at = unixepoch()
+       WHERE admin_message_id IN (${placeholders}) AND resuelto = 0`
+    ).run(...messageIds);
+    const insert = db.prepare("INSERT OR IGNORE INTO rrhh_avisos_ocultos (message_id) VALUES (?)");
+    for (const id of messageIds) insert.run(id);
   });
 }
 
 // Avisos cuyo rango [fecha_inicio, fecha_fin] se solapa con [desde, hasta].
-function getAusenciasReportadas(desde: string, hasta: string): AusenciaReportada[] {
+export function getAusenciasReportadas(desde: string, hasta: string): AusenciaReportada[] {
   return db
     .prepare(
-      `SELECT id, empleado_nombre, categoria, fecha_inicio, fecha_fin, certificado_pendiente, phone, created_at
-       FROM ausencias_reportadas
+      `SELECT * FROM ausencias_reportadas
        WHERE fecha_inicio <= ? AND fecha_fin >= ?`
     )
     .all(hasta, desde) as unknown as AusenciaReportada[];
@@ -2516,9 +2616,9 @@ export interface AusenciaRow {
   hora_inicio: string;
   hora_fin: string;
   horas: number;
-  // true si ese día cae dentro de un aviso de RRHH confirmado por el
-  // empleado (Enfermedad / Motivo Personal / Vacaciones) — ver
-  // ausencias_reportadas. No se descuenta de la liquidación.
+  // true si ese día cae dentro de un aviso de RRHH APROBADO (Enfermedad /
+  // Vacaciones) — ver ausencias_reportadas. No se descuenta de la liquidación.
+  // Motivo Personal, y los pedidos pendientes o rechazados, no justifican.
   justificada: boolean;
 }
 
@@ -2561,6 +2661,7 @@ export function calcularAusencias(filters: { desde: string; hasta: string; nombr
   const reportadas = getAusenciasReportadas(filters.desde, filters.hasta);
   const rangosPorEmpleado = new Map<string, { fecha_inicio: string; fecha_fin: string }[]>();
   for (const r of reportadas) {
+    if (r.estado !== "aprobado") continue;
     const key = normKey(r.empleado_nombre);
     if (!rangosPorEmpleado.has(key)) rangosPorEmpleado.set(key, []);
     rangosPorEmpleado.get(key)!.push({ fecha_inicio: r.fecha_inicio, fecha_fin: r.fecha_fin });
@@ -3361,7 +3462,7 @@ export function calcularSaldoVacaciones(anio?: number): SaldoVacacionesEmpleado[
   const vacacionesRows = db
     .prepare(
       `SELECT empleado_nombre, fecha_inicio, fecha_fin FROM ausencias_reportadas
-       WHERE categoria = 'Vacaciones' AND fecha_inicio <= ? AND fecha_fin >= ?`
+       WHERE categoria = 'Vacaciones' AND estado = 'aprobado' AND fecha_inicio <= ? AND fecha_fin >= ?`
     )
     .all(finAnio, inicioAnio) as { empleado_nombre: string; fecha_inicio: string; fecha_fin: string }[];
 

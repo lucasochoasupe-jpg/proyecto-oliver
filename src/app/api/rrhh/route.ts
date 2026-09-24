@@ -1,213 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
-import db, {
+import {
   calcularSaldoVacaciones,
   crearAusenciaReportada,
   getEmpleadoById,
-  getEmpleadoByNombre,
-  listAusenciasManuales,
-  listLegajoArchivosPorAdminMessageIds,
-  listLegajoArchivosInlinePorEmpleado,
   eliminarAusenciasReportadasManuales,
   eliminarAvisosBotMany,
-  type LegajoArchivo,
+  type EstadoAusencia,
 } from "@/lib/db";
+import { listarRegistrosRRHH } from "@/lib/rrhh-registros";
 
 export const dynamic = "force-dynamic";
-
-export interface AusenciaRecord {
-  id: number;
-  phone: string;
-  nombre: string;
-  sucursal: string;
-  motivo: string;
-  detalle: string;
-  contacto: string;
-  certificadoPendiente: boolean;
-  certificadoRecibidoEn: number | null; // unix timestamp, si ya se resolvió
-  fecha: number; // unix timestamp
-  raw: string;
-  origen?: "manual"; // ausente = viene del bot (aviso de WhatsApp)
-  archivos: LegajoArchivo[]; // certificados que el empleado mandó por WhatsApp, si los hay
-  empleadoId: number | null; // para linkear al legajo completo del empleado
-}
 
 const CATEGORIAS_MANUALES = ["Vacaciones", "Enfermedad", "Motivo Personal"] as const;
 type CategoriaManual = (typeof CATEGORIAS_MANUALES)[number];
 
-function formatFechaCorta(iso: string): string {
-  return new Date(`${iso}T00:00:00Z`).toLocaleDateString("es-AR", { timeZone: "UTC", day: "2-digit", month: "2-digit", year: "numeric" });
-}
-
-function parseAdminBlock(
-  content: string
-): Omit<AusenciaRecord, "id" | "phone" | "fecha" | "certificadoRecibidoEn" | "archivos" | "empleadoId"> | null {
-  // Intentar con etiquetas <ADMIN> primero, luego sin etiquetas
-  const tagMatch = content.match(/<ADMIN>([\s\S]*?)<\/ADMIN>/i);
-  const raw = tagMatch
-    ? tagMatch[1].trim()
-    : (() => {
-        const bare = content.match(/Aviso de Sanca:[\s\S]*?(?=\n\n|\n✅|\nAvisé|$)/i);
-        return bare ? bare[0].trim() : null;
-      })();
-
-  if (!raw) return null;
-
-  // "Aviso de Sanca: [Nombre] de sucursal [Sucursal] comunica [Motivo]. Detalle: [Detalle]. Contacto: [Contacto]"
-  const nombreMatch = raw.match(/Aviso de Sanca:\s*(.+?)\s+de sucursal/i);
-  const sucursalMatch = raw.match(/de sucursal\s+(.+?)\s+comunica/i);
-  const motivoMatch = raw.match(/comunica\s+(.+?)\.\s+Detalle:/i);
-  const detalleMatch = raw.match(/Detalle:\s*([\s\S]+?)(?:\.\s*Contacto:|Contacto:|$)/i);
-  const contactoMatch = raw.match(/Contacto:\s*(.+?)$/im);
-
-  const certificadoPendiente = raw.includes("CERTIFICADO PENDIENTE");
-
-  return {
-    nombre: nombreMatch?.[1]?.trim() ?? "Desconocido",
-    sucursal: sucursalMatch?.[1]?.trim() ?? "Desconocida",
-    motivo: motivoMatch?.[1]?.trim() ?? "Sin especificar",
-    detalle: detalleMatch?.[1]?.trim().replace(/\.$/, "") ?? raw,
-    contacto: contactoMatch?.[1]?.trim() ?? "—",
-    certificadoPendiente,
-    raw,
-  };
-}
-
+// Los registros se filtran y resumen en el cliente (ver rrhh-shared.ts), así
+// las tarjetas y el export reflejan siempre lo que se está viendo.
 export async function GET() {
   try {
-    // Traer todos los mensajes de assistant que contengan bloques ADMIN
-    const rows = db
-      .prepare(
-        `SELECT m.id, m.content, m.created_at, c.phone
-         FROM messages m
-         JOIN conversations c ON c.id = m.conversation_id
-         WHERE m.role = 'assistant' AND (m.content LIKE '%<ADMIN>%' OR m.content LIKE '%Aviso de Sanca:%')
-         ORDER BY m.created_at DESC`
-      )
-      .all() as { id: number; content: string; created_at: number; phone: string }[];
-
-    // certificadoPendiente sale de un texto fijo escrito al momento del aviso
-    // (nunca cambia solo). Los certificados que ya llegaron por WhatsApp se
-    // marcan resueltos en certificados_pendientes (ver resolverCertificadoPendiente
-    // en baileys/handler.ts) — cruzamos por el id del mensaje de aviso a admin.
-    const resueltos = db
-      .prepare(
-        `SELECT admin_message_id, resuelto_at
-         FROM certificados_pendientes
-         WHERE resuelto = 1 AND admin_message_id IS NOT NULL`
-      )
-      .all() as { admin_message_id: number; resuelto_at: number }[];
-    const resueltoPorMensaje = new Map(resueltos.map((r) => [r.admin_message_id, r.resuelto_at]));
-
-    const ausencias: AusenciaRecord[] = [];
-
-    for (const row of rows) {
-      const parsed = parseAdminBlock(row.content);
-      if (!parsed) continue;
-      const resueltoAt = resueltoPorMensaje.get(row.id) ?? null;
-      ausencias.push({
-        id: row.id,
-        phone: row.phone,
-        fecha: row.created_at,
-        ...parsed,
-        certificadoPendiente: parsed.certificadoPendiente && resueltoAt === null,
-        certificadoRecibidoEn: resueltoAt,
-        archivos: [],
-        empleadoId: null,
-      });
-    }
-
-    // Cargas manuales (admin, sin pasar por WhatsApp) — mismo `ausencias_reportadas`
-    // que alimenta saldo de vacaciones y liquidación, ver [[crearAusenciaReportada]].
-    // Se identifican con id negativo para no chocar con ids de mensajes.
-    for (const a of listAusenciasManuales()) {
-      const rango =
-        a.fecha_inicio === a.fecha_fin
-          ? ` el ${formatFechaCorta(a.fecha_inicio)}`
-          : ` del ${formatFechaCorta(a.fecha_inicio)} al ${formatFechaCorta(a.fecha_fin)}`;
-      ausencias.push({
-        id: -a.id,
-        phone: a.phone ?? "",
-        nombre: a.empleado_nombre,
-        sucursal: a.sucursal ?? "—",
-        motivo: `${a.categoria}${rango}`,
-        detalle: a.nota || "Cargado manualmente por administración",
-        contacto: a.phone || "—",
-        certificadoPendiente: a.categoria === "Enfermedad" && !!a.certificado_pendiente,
-        certificadoRecibidoEn: null,
-        fecha: a.created_at,
-        raw: "",
-        origen: "manual",
-        archivos: [],
-        empleadoId: null,
-      });
-    }
-    // Certificados que el empleado ya mandó por WhatsApp, para mostrarlos acá
-    // sin tener que ir a Legajos (ver [[listLegajoArchivosPorAdminMessageIds]]).
-    const archivosPorMensaje = listLegajoArchivosPorAdminMessageIds(
-      ausencias.filter((a) => a.id > 0).map((a) => a.id)
-    );
-    const empleadoIdPorNombre = new Map<string, number | null>();
-    for (const a of ausencias) {
-      if (a.id > 0) a.archivos = archivosPorMensaje.get(a.id) ?? [];
-      if (!empleadoIdPorNombre.has(a.nombre)) {
-        empleadoIdPorNombre.set(a.nombre, getEmpleadoByNombre(a.nombre)?.id ?? null);
-      }
-      a.empleadoId = empleadoIdPorNombre.get(a.nombre) ?? null;
-    }
-
-    // Certificados "inline" (el empleado dijo que ya lo tenía justo al avisar,
-    // en vez de pasar por el submenú "Entregar certificado pendiente") no
-    // quedan vinculados a ningún id — se emparejan con el aviso del mismo
-    // empleado que ocurrió justo antes, dentro de una ventana corta (llegan
-    // segundos/minutos después, en la misma conversación).
-    const VENTANA_INLINE_SEG = 30 * 60;
-    const inlinePorEmpleado = new Map<number, LegajoArchivo[]>();
-    for (const a of [...ausencias].sort((x, y) => x.fecha - y.fecha)) {
-      if (a.archivos.length > 0 || !a.empleadoId) continue;
-      if (!inlinePorEmpleado.has(a.empleadoId)) {
-        inlinePorEmpleado.set(a.empleadoId, listLegajoArchivosInlinePorEmpleado(a.empleadoId));
-      }
-      const disponibles = inlinePorEmpleado.get(a.empleadoId)!;
-      const idx = disponibles.findIndex(
-        (f) => f.created_at >= a.fecha && f.created_at - a.fecha <= VENTANA_INLINE_SEG
-      );
-      if (idx !== -1) {
-        a.archivos = [disponibles[idx]];
-        disponibles.splice(idx, 1);
-      }
-    }
-
-    ausencias.sort((a, b) => b.fecha - a.fecha);
-
-    // Métricas resumen
-    const totalAusencias = ausencias.length;
-    const certificadosPendientes = ausencias.filter((a) => a.certificadoPendiente).length;
-
-    const porSucursal: Record<string, number> = {};
-    const porMotivo: Record<string, number> = {};
-    for (const a of ausencias) {
-      porSucursal[a.sucursal] = (porSucursal[a.sucursal] ?? 0) + 1;
-      const tipoKey = a.motivo.toLowerCase().includes("urgencia")
-        ? "Urgencia"
-        : a.motivo.toLowerCase().includes("vacaciones") || a.motivo.toLowerCase().includes("licencia")
-        ? "Vacaciones"
-        : a.motivo.toLowerCase().includes("enfermedad")
-        ? "Enfermedad"
-        : a.motivo.toLowerCase().includes("personal")
-        ? "Motivo Personal"
-        : "Otro";
-      porMotivo[tipoKey] = (porMotivo[tipoKey] ?? 0) + 1;
-    }
-
-    return NextResponse.json({
-      ausencias,
-      resumen: {
-        total: totalAusencias,
-        certificadosPendientes,
-        porSucursal,
-        porMotivo,
-      },
-    });
+    return NextResponse.json({ ausencias: listarRegistrosRRHH() });
   } catch (err) {
     console.error("[api/rrhh]", err);
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
@@ -238,7 +49,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "El rango de fechas es inválido" }, { status: 400 });
   }
 
+  // Lo carga el propio admin, así que ya entra decidido: Vacaciones aprobadas;
+  // Enfermedad aprobada si ya trajo el certificado, si no queda pendiente
+  // hasta que lo presente; Motivo Personal es solo informativo.
+  const estado: EstadoAusencia =
+    categoria === "Motivo Personal" ? "informativo" : certificadoPendiente ? "pendiente" : "aprobado";
+
   const id = crearAusenciaReportada({
+    estado,
     empleadoNombre: empleado.nombre,
     categoria,
     fechaInicio,

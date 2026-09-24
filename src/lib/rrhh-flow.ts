@@ -656,7 +656,8 @@ async function procesarDatos(
 
     // Registro estructurado del rango de fechas — lo usa la liquidación de
     // sueldos para no descontar como ausencia injustificada un día que el
-    // empleado sí avisó (Urgencia no tiene rango de fechas, no se registra acá).
+    // empleado sí avisó, una vez que RRHH aprueba el pedido desde el panel
+    // (Urgencia no tiene rango de fechas, no se registra acá).
     if (categoria !== "Urgencia" && state.fechaInicio && state.fechaFin) {
       crearAusenciaReportada({
         empleadoNombre: nombre,
@@ -666,6 +667,7 @@ async function procesarDatos(
         certificadoPendiente: categoria === "Enfermedad" && state.certificado === false,
         phone,
         adminMessageId,
+        sucursal,
       });
     }
 
@@ -682,14 +684,25 @@ async function procesarDatos(
   if (categoria === "Enfermedad" && state.certificado === true) {
     await reply(
       "Avisé a Administración sobre tu ausencia. ✅\n\n" +
-        "Ahora, por favor adjuntá el archivo (PDF o foto) de tu certificado médico para completar el registro."
+        "Ahora, por favor adjuntá el archivo (PDF o foto) de tu certificado médico para completar el registro. " +
+        "Cuando RRHH lo revise, te aviso por acá si fue aprobado."
     );
   } else if (categoria === "Enfermedad" && state.certificado === false) {
     await reply(
       "Avisé a Administración sobre tu ausencia. ✅\n\n" +
         "Es *obligatorio* que presentes el certificado médico a la brevedad. Cuando lo tengas, escribime " +
         'de nuevo y elegí la opción *[4] Entregar certificado pendiente* del menú, o presentalo en ' +
-        "Administración cuando te reintegres."
+        "Administración cuando te reintegres. Cuando RRHH lo revise, te aviso por acá si fue aprobado."
+    );
+  } else if (categoria === "Vacaciones") {
+    await reply(
+      "Listo, envié tu solicitud de vacaciones a Administración. ✅\n\n" +
+        "Queda *pendiente de aprobación*: te aviso por acá apenas RRHH la revise."
+    );
+  } else if (categoria === "Motivo Personal") {
+    await reply(
+      "Listo, avisé a Administración. ✅\n\n" +
+        "Tené en cuenta que el aviso por motivo personal queda registrado, pero *no justifica* la inasistencia."
     );
   } else if (categoria === "Urgencia") {
     await reply("Avisé a Administración sobre tu urgencia. ✅ Se van a comunicar a la brevedad.");
