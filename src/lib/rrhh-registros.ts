@@ -62,6 +62,7 @@ function camposAusencia(a: AusenciaReportada | undefined) {
     estado: a?.estado ?? null,
     respuesta: a?.respuesta ?? null,
     resueltoAt: a?.resuelto_at ?? null,
+    goceSueldo: a && a.goce_sueldo !== null ? a.goce_sueldo === 1 : null,
     saldoVacaciones: null,
   };
 }
@@ -224,15 +225,20 @@ function textoDecision(a: AusenciaReportada, decision: "aprobado" | "rechazado",
   const pedido =
     a.categoria === "Vacaciones"
       ? `tu solicitud de vacaciones ${rango}`
+      : a.categoria === "Motivo Personal"
+      ? `tu ausencia por motivo personal ${rango}`
       : `tu certificado médico por la ausencia ${rango}`;
+  const femenino = a.categoria === "Vacaciones" || a.categoria === "Motivo Personal";
   const nombre = nombreParaSaludo(a.empleado_nombre);
   const nota = comentario ? `\n\nComentario de RRHH: ${comentario}` : "";
 
   if (decision === "aprobado") {
-    const fue = a.categoria === "Vacaciones" ? "fue *aprobada*" : "fue *aprobado*";
-    return `Hola ${nombre}, te informamos que ${pedido} ${fue}. ✅${nota}`;
+    const fue = femenino ? "fue *aprobada*" : "fue *aprobado*";
+    const goce =
+      a.goce_sueldo === 1 ? " *con goce de sueldo*" : a.goce_sueldo === 0 ? " *sin goce de sueldo* (ese día no se cobra)" : "";
+    return `Hola ${nombre}, te informamos que ${pedido} ${fue}${goce}. ✅${nota}`;
   }
-  const fue = a.categoria === "Vacaciones" ? "*no fue aprobada*" : "*no fue aprobado*";
+  const fue = femenino ? "*no fue aprobada*" : "*no fue aprobado*";
   return (
     `Hola ${nombre}, te informamos que ${pedido} ${fue}. ❌${nota}\n\n` +
     "Si tenés dudas, acercate a Administración."
@@ -284,7 +290,7 @@ export function eventosCalendario(desde: string, hasta: string): EventoCalendari
     const inicio = a.fecha_inicio < desde ? desde : a.fecha_inicio;
     const fin = a.fecha_fin > hasta ? hasta : a.fecha_fin;
     for (let f = inicio; f <= fin; f = addDias(f, 1)) {
-      eventos.push({ fecha: f, nombre: a.empleado_nombre, sucursal: a.sucursal, tipo, estado: a.estado, registroId });
+      eventos.push({ fecha: f, nombre: a.empleado_nombre, sucursal: a.sucursal, tipo, estado: a.estado, goceSueldo: a.goce_sueldo === null ? null : a.goce_sueldo === 1, registroId });
     }
   }
 

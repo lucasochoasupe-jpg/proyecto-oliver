@@ -385,11 +385,10 @@ try { db.exec("ALTER TABLE turno_templates ADD COLUMN tolerancia_min INTEGER"); 
 try { db.exec("ALTER TABLE horarios_empleado ADD COLUMN tolerancia_min INTEGER"); } catch {}
 try { db.exec("ALTER TABLE legajo_archivos ADD COLUMN etiqueta TEXT"); } catch {}
 
-// Aprobación de pedidos de RRHH (ver [[decidirAusenciaReportada]]). Solo
-// Vacaciones y Enfermedad se aprueban/rechazan; Motivo Personal es
-// 'informativo' (explica la falta pero no la justifica). El backfill corre
-// una sola vez — cuando la columna se crea — y deja todo lo histórico como
-// 'aprobado' para no cambiar liquidaciones ya hechas (salvo Motivo Personal).
+// Aprobación de pedidos de RRHH (ver [[decidirAusenciaReportada]]). El
+// backfill corre una sola vez — cuando la columna se crea — y deja todo lo
+// histórico como 'aprobado' para no cambiar liquidaciones ya hechas (salvo
+// Motivo Personal, que en ese momento era solo 'informativo').
 try {
   db.exec("ALTER TABLE ausencias_reportadas ADD COLUMN estado TEXT");
   db.exec(
@@ -398,6 +397,12 @@ try {
 } catch {}
 try { db.exec("ALTER TABLE ausencias_reportadas ADD COLUMN resuelto_at INTEGER"); } catch {}
 try { db.exec("ALTER TABLE ausencias_reportadas ADD COLUMN respuesta TEXT"); } catch {}
+// Motivo Personal ahora también se aprueba/rechaza, y al aprobarlo RRHH elige
+// con o sin goce de sueldo (1/0; null en las demás categorías). Los que
+// quedaron como 'informativo' pasan a 'pendiente' para que RRHH los decida —
+// en la liquidación da lo mismo: ninguno de los dos justifica la falta.
+try { db.exec("ALTER TABLE ausencias_reportadas ADD COLUMN goce_sueldo INTEGER"); } catch {}
+db.exec("UPDATE ausencias_reportadas SET estado = 'pendiente' WHERE estado = 'informativo'");
 
 // Avisos del bot que se sacaron del panel de RRHH. El mensaje original queda
 // en el chat (no se borra de `messages`), solo deja de listarse en el panel.
@@ -826,11 +831,17 @@ export function resolverCertificadoPendientePorId(id: number): CertificadoPendie
 // ausencia injustificada un día que el empleado sí avisó — pero solo si el
 // pedido quedó 'aprobado' (ver [[decidirAusenciaReportada]]).
 
-// pendiente/aprobado/rechazado: Vacaciones y Enfermedad (RRHH decide).
-// informativo: Motivo Personal — explica la falta, nunca la justifica.
-export type EstadoAusencia = "pendiente" | "aprobado" | "rechazado" | "informativo";
+// RRHH aprueba o rechaza todas las categorías con rango de fechas. Un Motivo
+// Personal aprobado además lleva goce_sueldo: con goce no se descuenta; sin
+// goce la falta queda justificada (no hace perder el presentismo) pero el
+// día se descuenta igual.
+export type EstadoAusencia = "pendiente" | "aprobado" | "rechazado";
 
-export const CATEGORIAS_CON_APROBACION = ["Vacaciones", "Enfermedad"] as const;
+export const CATEGORIAS_CON_APROBACION = ["Vacaciones", "Enfermedad", "Motivo Personal"] as const;
+
+export function eligeGoceSueldo(categoria: string): boolean {
+  return categoria === "Motivo Personal";
+}
 
 export function requiereAprobacion(categoria: string): boolean {
   return (CATEGORIAS_CON_APROBACION as readonly string[]).includes(categoria);
@@ -850,6 +861,7 @@ export interface AusenciaReportada {
   estado: EstadoAusencia;
   resuelto_at: number | null;
   respuesta: string | null; // comentario de RRHH al aprobar/rechazar
+  goce_sueldo: number | null; // solo Motivo Personal aprobado: 1 con goce, 0 sin goce
   created_at: number;
 }
 
@@ -863,16 +875,20 @@ export function crearAusenciaReportada(data: {
   adminMessageId: number | null;
   sucursal?: string | null;
   nota?: string | null;
-  // Por defecto: 'pendiente' si la categoría se aprueba, 'informativo' si no.
-  // Las cargas manuales del admin lo pasan explícito.
+  // Por defecto 'pendiente'. Las cargas manuales del admin lo pasan explícito.
   estado?: EstadoAusencia;
+  goceSueldo?: boolean | null; // Motivo Personal cargado ya aprobado
 }): number {
-  const estado = data.estado ?? (requiereAprobacion(data.categoria) ? "pendiente" : "informativo");
+  const estado = data.estado ?? "pendiente";
+  const goce =
+    estado === "aprobado" && eligeGoceSueldo(data.categoria) && typeof data.goceSueldo === "boolean"
+      ? data.goceSueldo ? 1 : 0
+      : null;
   const info = db
     .prepare(
       `INSERT INTO ausencias_reportadas
-         (empleado_nombre, categoria, fecha_inicio, fecha_fin, certificado_pendiente, phone, admin_message_id, sucursal, nota, estado, resuelto_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (empleado_nombre, categoria, fecha_inicio, fecha_fin, certificado_pendiente, phone, admin_message_id, sucursal, nota, estado, resuelto_at, goce_sueldo)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       data.empleadoNombre,
@@ -885,7 +901,8 @@ export function crearAusenciaReportada(data: {
       data.sucursal ?? null,
       data.nota ?? null,
       estado,
-      estado === "aprobado" || estado === "rechazado" ? Math.floor(Date.now() / 1000) : null
+      estado === "aprobado" || estado === "rechazado" ? Math.floor(Date.now() / 1000) : null,
+      goce
     );
   return Number(info.lastInsertRowid);
 }
@@ -929,17 +946,21 @@ export function getAusenciaReportadaPorAdminMessageId(messageId: number): Ausenc
 // recibido el certificado (aunque lo haya traído en papel): se baja la marca
 // de pendiente y se cierra el certificados_pendientes del aviso, así el bot
 // deja de ofrecerle "[4] Entregar certificado pendiente" por ese aviso.
+// Aprobar un Motivo Personal exige goceSueldo (con/sin goce de sueldo).
 export function decidirAusenciaReportada(
   id: number,
   decision: "aprobado" | "rechazado",
-  respuesta: string | null
+  respuesta: string | null,
+  goceSueldo: boolean | null = null
 ): AusenciaReportada | null {
   const row = getAusenciaReportada(id);
   if (!row || !requiereAprobacion(row.categoria)) return null;
+  const goce = decision === "aprobado" && eligeGoceSueldo(row.categoria) ? goceSueldo : null;
+  if (decision === "aprobado" && eligeGoceSueldo(row.categoria) && goce === null) return null;
   withTransaction(() => {
     db.prepare(
-      "UPDATE ausencias_reportadas SET estado = ?, respuesta = ?, resuelto_at = unixepoch() WHERE id = ?"
-    ).run(decision, respuesta, id);
+      "UPDATE ausencias_reportadas SET estado = ?, respuesta = ?, goce_sueldo = ?, resuelto_at = unixepoch() WHERE id = ?"
+    ).run(decision, respuesta, goce === null ? null : goce ? 1 : 0, id);
     if (decision === "aprobado" && row.categoria === "Enfermedad") {
       db.prepare("UPDATE ausencias_reportadas SET certificado_pendiente = 0 WHERE id = ?").run(id);
       if (row.admin_message_id !== null) {
@@ -2616,10 +2637,12 @@ export interface AusenciaRow {
   hora_inicio: string;
   hora_fin: string;
   horas: number;
-  // true si ese día cae dentro de un aviso de RRHH APROBADO (Enfermedad /
-  // Vacaciones) — ver ausencias_reportadas. No se descuenta de la liquidación.
-  // Motivo Personal, y los pedidos pendientes o rechazados, no justifican.
+  // true si ese día cae dentro de un aviso de RRHH APROBADO — ver
+  // ausencias_reportadas. Los pedidos pendientes o rechazados no justifican.
   justificada: boolean;
+  // Justificada por un Motivo Personal aprobado SIN goce de sueldo: no cuenta
+  // como falta sin aviso (no hace perder presentismo) pero se descuenta.
+  sin_goce: boolean;
 }
 
 export function calcularAusencias(filters: { desde: string; hasta: string; nombres?: string[] }): AusenciaRow[] {
@@ -2659,16 +2682,21 @@ export function calcularAusencias(filters: { desde: string; hasta: string; nombr
   );
 
   const reportadas = getAusenciasReportadas(filters.desde, filters.hasta);
-  const rangosPorEmpleado = new Map<string, { fecha_inicio: string; fecha_fin: string }[]>();
+  const rangosPorEmpleado = new Map<string, { fecha_inicio: string; fecha_fin: string; sin_goce: boolean }[]>();
   for (const r of reportadas) {
     if (r.estado !== "aprobado") continue;
     const key = normKey(r.empleado_nombre);
     if (!rangosPorEmpleado.has(key)) rangosPorEmpleado.set(key, []);
-    rangosPorEmpleado.get(key)!.push({ fecha_inicio: r.fecha_inicio, fecha_fin: r.fecha_fin });
+    rangosPorEmpleado.get(key)!.push({ fecha_inicio: r.fecha_inicio, fecha_fin: r.fecha_fin, sin_goce: r.goce_sueldo === 0 });
   }
-  function esJustificada(empleadoNombre: string, fecha: string): boolean {
-    const rangos = rangosPorEmpleado.get(normKey(empleadoNombre));
-    return !!rangos?.some((r) => fecha >= r.fecha_inicio && fecha <= r.fecha_fin);
+  // Si el día cae en más de un pedido aprobado, gana el que no descuenta
+  // (ej. vacaciones superpuestas con un motivo personal sin goce).
+  function justificacion(empleadoNombre: string, fecha: string): { justificada: boolean; sin_goce: boolean } {
+    const rangos = (rangosPorEmpleado.get(normKey(empleadoNombre)) ?? []).filter(
+      (r) => fecha >= r.fecha_inicio && fecha <= r.fecha_fin
+    );
+    if (rangos.length === 0) return { justificada: false, sin_goce: false };
+    return { justificada: true, sin_goce: rangos.every((r) => r.sin_goce) };
   }
 
   // No contar como ausencia un turno de HOY que todavía no arrancó — si no,
@@ -2693,7 +2721,7 @@ export function calcularAusencias(filters: { desde: string; hasta: string; nombr
         hora_inicio: h.hora_inicio,
         hora_fin: h.hora_fin,
         horas: duracionHorarioHoras(h.hora_inicio, h.hora_fin),
-        justificada: esJustificada(h.empleado_nombre, fecha),
+        ...justificacion(h.empleado_nombre, fecha),
       });
     }
   }
@@ -2710,7 +2738,7 @@ export function calcularAusencias(filters: { desde: string; hasta: string; nombr
       hora_inicio: p.hora_inicio,
       hora_fin: p.hora_fin,
       horas: duracionHorarioHoras(p.hora_inicio, p.hora_fin),
-      justificada: esJustificada(p.empleado_nombre, p.fecha),
+      ...justificacion(p.empleado_nombre, p.fecha),
     });
   }
 
@@ -2746,6 +2774,12 @@ interface ParteLiquidacion {
   descuento_ausencia: number;
   dias_ausencia_justificada: number; // ausencias CON aviso de RRHH confirmado (no se descuentan)
   horas_ausencia_justificada: number;
+  dias_sin_goce: number; // motivo personal aprobado sin goce (justificada, pero se descuenta)
+  horas_sin_goce: number;
+  descuento_sin_goce: number; // solo mensual
+  dias_justificados_pagos: number; // solo tipo 'dia': faltas con goce que se pagan igual (horas del turno × valor hora)
+  horas_justificadas_pagas: number; // horas de turno de esos días
+  monto_ausencia_justificada: number; // horas_justificadas_pagas × valor_hora
   dias_trabajados: number | null; // solo tipo 'dia', con horario cargado
   horas_extra: number | null; // solo tipo 'dia', con horario cargado: horas por encima de lo pactado ese día
   total_por_horas: number | null; // horas_trabajadas × valor_hora — referencia para comparar contra 'total' (mensual y dia)
@@ -2837,6 +2871,12 @@ export interface LiquidacionEmpleado {
   descuento_ausencia: number;
   dias_ausencia_justificada: number; // ausencias CON aviso de RRHH confirmado (no se descuentan)
   horas_ausencia_justificada: number;
+  dias_sin_goce: number; // motivo personal aprobado sin goce (justificada, pero se descuenta)
+  horas_sin_goce: number;
+  descuento_sin_goce: number; // solo mensual
+  dias_justificados_pagos: number; // solo tipo 'dia': faltas con goce que se pagan igual (horas del turno × valor hora)
+  horas_justificadas_pagas: number; // horas de turno de esos días
+  monto_ausencia_justificada: number; // horas_justificadas_pagas × valor_hora
   dias_trabajados: number | null; // solo tipo 'dia', con horario cargado
   horas_extra: number | null; // solo tipo 'dia', con horario cargado: horas por encima de lo pactado ese día
   total_por_horas: number | null; // horas_trabajadas × valor_hora — referencia para comparar contra 'total' (mensual y dia)
@@ -2930,6 +2970,12 @@ function calcularParte(valores: ParteValores, ctx: ParteContexto, advertencias: 
       descuento_ausencia: 0,
       dias_ausencia_justificada: 0,
       horas_ausencia_justificada: 0,
+      dias_sin_goce: 0,
+      horas_sin_goce: 0,
+      descuento_sin_goce: 0,
+      dias_justificados_pagos: 0,
+      horas_justificadas_pagas: 0,
+      monto_ausencia_justificada: 0,
       dias_trabajados: null,
       horas_extra: null,
       total_por_horas: horasTrabajadas * (valores.valor_hora ?? 0),
@@ -2943,7 +2989,7 @@ function calcularParte(valores: ParteValores, ctx: ParteContexto, advertencias: 
     const horasTrabajadasTotal = turnosCerrados.reduce((acc, t) => acc + (t.horas ?? 0), 0);
 
     if (!valores.valor_dia) advertencias.push("Sin valor por día configurado");
-    if (!valores.valor_hora) advertencias.push("Sin valor hora configurado (necesario para horas extra)");
+    if (!valores.valor_hora) advertencias.push("Sin valor hora configurado (necesario para horas extra y faltas con goce)");
 
     // Sin ningún horario cargado (ni recurrente ni puntual) no hay forma de
     // saber qué es "jornal normal" vs "hora extra" — se paga directo por
@@ -2965,6 +3011,12 @@ function calcularParte(valores: ParteValores, ctx: ParteContexto, advertencias: 
         descuento_ausencia: 0,
         dias_ausencia_justificada: 0,
         horas_ausencia_justificada: 0,
+        dias_sin_goce: 0,
+        horas_sin_goce: 0,
+        descuento_sin_goce: 0,
+        dias_justificados_pagos: 0,
+        horas_justificadas_pagas: 0,
+        monto_ausencia_justificada: 0,
         dias_trabajados: null,
         horas_extra: null,
         total_por_horas: horasTrabajadasTotal * (valores.valor_hora ?? 0),
@@ -3018,7 +3070,18 @@ function calcularParte(valores: ParteValores, ctx: ParteContexto, advertencias: 
     }
 
     const ausenciasInjustificadas = ausenciasEmp.filter((a) => !a.justificada);
-    const ausenciasJustificadas = ausenciasEmp.filter((a) => a.justificada);
+    const ausenciasJustificadas = ausenciasEmp.filter((a) => a.justificada && !a.sin_goce);
+    const ausenciasSinGoce = ausenciasEmp.filter((a) => a.sin_goce);
+
+    // Turnos pactados que faltó con un pedido aprobado CON goce (vacaciones,
+    // enfermedad, motivo personal con goce): se pagan las horas del turno ×
+    // valor hora. Si ese día ya cobró jornal por haber cubierto otro turno
+    // (turno partido), no se paga dos veces.
+    const justificadasPagas = ausenciasJustificadas.filter((a) => !horasPorFecha.has(a.fecha));
+    const diasJustificadosPagos = diasUnicos(justificadasPagas);
+    const horasJustificadasPagas = justificadasPagas.reduce((acc, a) => acc + a.horas, 0);
+    const montoAusenciaJustificada = horasJustificadasPagas * (valores.valor_hora ?? 0);
+    total += montoAusenciaJustificada;
 
     const totalPorHoras = compararConValorHora(total, horasTrabajadasTotal, valores.valor_hora, advertencias);
 
@@ -3038,6 +3101,12 @@ function calcularParte(valores: ParteValores, ctx: ParteContexto, advertencias: 
       descuento_ausencia: 0, // "por día" no tiene una base fija de la cual descontar
       dias_ausencia_justificada: diasUnicos(ausenciasJustificadas),
       horas_ausencia_justificada: ausenciasJustificadas.reduce((acc, a) => acc + a.horas, 0),
+      dias_sin_goce: diasUnicos(ausenciasSinGoce),
+      horas_sin_goce: ausenciasSinGoce.reduce((acc, a) => acc + a.horas, 0),
+      descuento_sin_goce: 0, // igual que una falta: ese día no genera jornal
+      dias_justificados_pagos: diasJustificadosPagos,
+      horas_justificadas_pagas: horasJustificadasPagas,
+      monto_ausencia_justificada: montoAusenciaJustificada,
       dias_trabajados: diasTrabajados,
       horas_extra: horasExtra,
       total_por_horas: totalPorHoras,
@@ -3059,10 +3128,13 @@ function calcularParte(valores: ParteValores, ctx: ParteContexto, advertencias: 
     const descuentoTardanza = valorHoraEquivalente ? (minutosPerdidos / 60) * valorHoraEquivalente : 0;
 
     const ausenciasInjustificadas = ausenciasEmp.filter((a) => !a.justificada);
-    const ausenciasJustificadas = ausenciasEmp.filter((a) => a.justificada);
+    const ausenciasJustificadas = ausenciasEmp.filter((a) => a.justificada && !a.sin_goce);
+    const ausenciasSinGoce = ausenciasEmp.filter((a) => a.sin_goce);
     const horasAusencia = ausenciasInjustificadas.reduce((acc, a) => acc + a.horas, 0);
     const horasAusenciaJustificada = ausenciasJustificadas.reduce((acc, a) => acc + a.horas, 0);
+    const horasSinGoce = ausenciasSinGoce.reduce((acc, a) => acc + a.horas, 0);
     const descuentoAusencia = valorHoraEquivalente ? horasAusencia * valorHoraEquivalente : 0;
+    const descuentoSinGoce = valorHoraEquivalente ? horasSinGoce * valorHoraEquivalente : 0;
 
     const horasTrabajadas = turnosEmp.filter((t) => t.horas !== null).reduce((acc, t) => acc + (t.horas ?? 0), 0);
     const horasEnCurso = turnosEmp.some((t) => t.horas === null);
@@ -3071,7 +3143,7 @@ function calcularParte(valores: ParteValores, ctx: ParteContexto, advertencias: 
     if (horasPactadas === 0) advertencias.push("Sin horario cargado — no se pueden calcular descuentos");
     if (!valores.valor_hora) advertencias.push("Sin valor hora configurado (no se puede comparar contra horas trabajadas)");
 
-    const total = (valores.sueldo_mensual ?? 0) - descuentoTardanza - descuentoAusencia;
+    const total = (valores.sueldo_mensual ?? 0) - descuentoTardanza - descuentoAusencia - descuentoSinGoce;
     const totalPorHoras = compararConValorHora(total, horasTrabajadas, valores.valor_hora, advertencias);
 
     return {
@@ -3090,6 +3162,12 @@ function calcularParte(valores: ParteValores, ctx: ParteContexto, advertencias: 
       descuento_ausencia: descuentoAusencia,
       dias_ausencia_justificada: diasUnicos(ausenciasJustificadas),
       horas_ausencia_justificada: horasAusenciaJustificada,
+      dias_sin_goce: diasUnicos(ausenciasSinGoce),
+      horas_sin_goce: horasSinGoce,
+      descuento_sin_goce: descuentoSinGoce,
+      dias_justificados_pagos: 0,
+      horas_justificadas_pagas: 0,
+      monto_ausencia_justificada: 0,
       dias_trabajados: null,
       horas_extra: null,
       total_por_horas: totalPorHoras,
@@ -3114,6 +3192,12 @@ function calcularParte(valores: ParteValores, ctx: ParteContexto, advertencias: 
     descuento_ausencia: 0,
     dias_ausencia_justificada: 0,
     horas_ausencia_justificada: 0,
+    dias_sin_goce: 0,
+    horas_sin_goce: 0,
+    descuento_sin_goce: 0,
+    dias_justificados_pagos: 0,
+    horas_justificadas_pagas: 0,
+    monto_ausencia_justificada: 0,
     dias_trabajados: null,
     horas_extra: null,
     total_por_horas: null,
@@ -3317,6 +3401,12 @@ function calcularAportesLegalesAguinaldo(bruto: number, config: ConfiguracionLiq
       descuento_ausencia: 0,
       dias_ausencia_justificada: 0,
       horas_ausencia_justificada: 0,
+      dias_sin_goce: 0,
+      horas_sin_goce: 0,
+      descuento_sin_goce: 0,
+      dias_justificados_pagos: 0,
+      horas_justificadas_pagas: 0,
+      monto_ausencia_justificada: 0,
       dias_trabajados: null,
       horas_extra: null,
       total_por_horas: null,

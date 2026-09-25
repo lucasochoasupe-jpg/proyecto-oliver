@@ -702,7 +702,7 @@ async function procesarDatos(
   } else if (categoria === "Motivo Personal") {
     await reply(
       "Listo, avisé a Administración. ✅\n\n" +
-        "Tené en cuenta que el aviso por motivo personal queda registrado, pero *no justifica* la inasistencia."
+        "Queda *pendiente de aprobación*: te aviso por acá apenas RRHH lo revise."
     );
   } else if (categoria === "Urgencia") {
     await reply("Avisé a Administración sobre tu urgencia. ✅ Se van a comunicar a la brevedad.");

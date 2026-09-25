@@ -8,6 +8,7 @@ import CalendarioFaltas from "./CalendarioFaltas";
 import {
   ESTADO_LABEL,
   FILTROS_VACIOS,
+  estadoTexto,
   TIPOS,
   diasDelRango,
   filtrarRegistros,
@@ -21,7 +22,7 @@ import {
 
 const SUCURSALES = ["Todas", "Fraga", "Campbell", "Mendoza", "Avenida", "Donado", "Montevideo", "Terminal"];
 const CATEGORIAS_MANUALES = ["Vacaciones", "Enfermedad", "Motivo Personal"] as const;
-const ESTADOS_FILTRO: EstadoAusencia[] = ["pendiente", "aprobado", "rechazado", "informativo"];
+const ESTADOS_FILTRO: EstadoAusencia[] = ["pendiente", "aprobado", "rechazado"];
 
 function formatDate(unix: number) {
   return new Date(unix * 1000).toLocaleDateString("es-AR", {
@@ -48,7 +49,7 @@ function formatTamanio(bytes: number) {
 }
 
 function puedeDecidirse(r: RegistroRRHH): boolean {
-  return r.ausenciaId !== null && (r.tipo === "Vacaciones" || r.tipo === "Enfermedad");
+  return r.ausenciaId !== null && (r.tipo === "Vacaciones" || r.tipo === "Enfermedad" || r.tipo === "Motivo Personal");
 }
 
 function BadgeMotivo({ tipo }: { tipo: string }) {
@@ -66,19 +67,21 @@ function BadgeMotivo({ tipo }: { tipo: string }) {
   );
 }
 
-function BadgeEstado({ estado }: { estado: EstadoAusencia | null }) {
+function BadgeEstado({ estado, goceSueldo }: { estado: EstadoAusencia | null; goceSueldo: boolean | null }) {
   if (!estado) return <span className="text-xs text-[#8B6347]">—</span>;
   const estilos: Record<EstadoAusencia, string> = {
     pendiente: "bg-amber-50 text-amber-700 border border-amber-300 border-dashed",
-    aprobado: "bg-emerald-100 text-emerald-700 border border-emerald-200",
+    aprobado:
+      goceSueldo === false
+        ? "bg-sky-50 text-sky-700 border border-sky-200"
+        : "bg-emerald-100 text-emerald-700 border border-emerald-200",
     rechazado: "bg-red-100 text-red-700 border border-red-200",
-    informativo: "bg-gray-100 text-gray-600 border border-gray-200",
   };
-  const icono: Record<EstadoAusencia, string> = { pendiente: "⏳ ", aprobado: "✓ ", rechazado: "✕ ", informativo: "" };
+  const icono: Record<EstadoAusencia, string> = { pendiente: "⏳ ", aprobado: "✓ ", rechazado: "✕ " };
   return (
     <span className={`text-xs font-medium px-2 py-0.5 rounded-full whitespace-nowrap ${estilos[estado]}`}>
       {icono[estado]}
-      {ESTADO_LABEL[estado]}
+      {estadoTexto(estado, goceSueldo)}
     </span>
   );
 }
@@ -104,6 +107,7 @@ export default function RRHHPage() {
   const [decisionEnCurso, setDecisionEnCurso] = useState<DecisionEnCurso | null>(null);
   const [comentario, setComentario] = useState("");
   const [notificar, setNotificar] = useState(true);
+  const [goceSueldo, setGoceSueldo] = useState<boolean | null>(null);
   const [guardandoDecision, setGuardandoDecision] = useState(false);
   const [errorDecision, setErrorDecision] = useState("");
 
@@ -116,6 +120,7 @@ export default function RRHHPage() {
   const [nuevaFechaInicio, setNuevaFechaInicio] = useState(hoyAR());
   const [nuevaFechaFin, setNuevaFechaFin] = useState(hoyAR());
   const [nuevoCertificado, setNuevoCertificado] = useState(true);
+  const [nuevoGoce, setNuevoGoce] = useState<"" | "con" | "sin">("");
   const [nuevaNota, setNuevaNota] = useState("");
   const [guardandoManual, setGuardandoManual] = useState(false);
   const [errorManual, setErrorManual] = useState("");
@@ -169,6 +174,10 @@ export default function RRHHPage() {
       setErrorManual("El rango de fechas es inválido");
       return;
     }
+    if (nuevaCategoria === "Motivo Personal" && !nuevoGoce) {
+      setErrorManual("Elegí si es con goce o sin goce de sueldo");
+      return;
+    }
     setGuardandoManual(true);
     const res = await fetch("/api/rrhh", {
       method: "POST",
@@ -180,6 +189,7 @@ export default function RRHHPage() {
         fechaInicio: nuevaFechaInicio,
         fechaFin: nuevaFechaFin,
         certificadoPendiente: nuevaCategoria === "Enfermedad" ? !nuevoCertificado : false,
+        goceSueldo: nuevaCategoria === "Motivo Personal" ? nuevoGoce === "con" : null,
         nota: nuevaNota,
       }),
     });
@@ -192,6 +202,7 @@ export default function RRHHPage() {
     const body = (await res.json()) as { advertencia: string | null };
     if (body.advertencia) setAvisoManual(body.advertencia);
     setNuevaNota("");
+    setNuevoGoce("");
     fetchData();
   }
 
@@ -252,18 +263,23 @@ export default function RRHHPage() {
     setDecisionEnCurso({ registro, decision });
     setComentario("");
     setNotificar(true);
+    setGoceSueldo(null);
     setErrorDecision("");
   }
 
   async function confirmarDecision() {
     if (!decisionEnCurso) return;
     const { registro, decision } = decisionEnCurso;
+    if (decision === "aprobado" && registro.tipo === "Motivo Personal" && goceSueldo === null) {
+      setErrorDecision("Elegí si es con goce o sin goce de sueldo");
+      return;
+    }
     setGuardandoDecision(true);
     setErrorDecision("");
     const res = await fetch(`/api/rrhh/${registro.id}/decision`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ decision, comentario, notificar }),
+      body: JSON.stringify({ decision, comentario, notificar, goceSueldo }),
     });
     setGuardandoDecision(false);
     const body = await res.json().catch(() => ({}));
@@ -271,7 +287,12 @@ export default function RRHHPage() {
       setErrorDecision(body.error ?? "No se pudo guardar la decisión");
       return;
     }
-    const verbo = decision === "aprobado" ? "Aprobado" : "Rechazado";
+    const verbo =
+      decision === "rechazado"
+        ? "Rechazado"
+        : registro.tipo === "Motivo Personal"
+        ? `Aprobado ${goceSueldo ? "con goce" : "sin goce"}`
+        : "Aprobado";
     if (!notificar) {
       setAviso({ tipo: "ok", texto: `${verbo}: ${registro.nombre}. No se le mandó mensaje.` });
     } else if (body.notificado) {
@@ -372,7 +393,7 @@ export default function RRHHPage() {
                 <h2 className="font-semibold text-[#2C1810] text-sm">Cargar pedido manualmente</h2>
                 <p className="text-xs text-[#8B6347]">
                   Para cuando el empleado avisó de forma presencial y no por WhatsApp. Queda aprobado directamente (salvo una
-                  Enfermedad sin certificado, que queda pendiente hasta que lo presente). Motivo Personal queda registrado pero no justifica la falta.
+                  Enfermedad sin certificado, que queda pendiente hasta que lo presente). En Motivo Personal elegís si es con o sin goce de sueldo.
                 </p>
                 <div className="flex flex-wrap gap-3 items-end">
                   <div className="flex flex-col gap-1">
@@ -437,6 +458,20 @@ export default function RRHHPage() {
                       />
                       <span className="text-sm text-[#2C1810]">Ya presentó el certificado</span>
                     </label>
+                  )}
+                  {nuevaCategoria === "Motivo Personal" && (
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs text-[#8B6347] font-medium">Goce de sueldo</label>
+                      <select
+                        value={nuevoGoce}
+                        onChange={(e) => setNuevoGoce(e.target.value as "" | "con" | "sin")}
+                        className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                      >
+                        <option value="">Elegir...</option>
+                        <option value="con">Con goce</option>
+                        <option value="sin">Sin goce (se descuenta)</option>
+                      </select>
+                    </div>
                   )}
                 </div>
                 <div>
@@ -677,7 +712,7 @@ export default function RRHHPage() {
                           </td>
                           <td className="px-4 py-3" data-label="Estado">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <BadgeEstado estado={a.estado} />
+                              <BadgeEstado estado={a.estado} goceSueldo={a.goceSueldo} />
                               {a.estado === "pendiente" && puedeDecidirse(a) && (
                                 <span className="flex items-center gap-1">
                                   <button
@@ -791,8 +826,8 @@ export default function RRHHPage() {
               )}
               <div className="flex items-center gap-2">
                 <span className="text-xs text-[#8B6347] w-24 shrink-0">Estado</span>
-                <BadgeEstado estado={detalle.estado} />
-                {detalle.resueltoAt && detalle.estado !== "pendiente" && detalle.estado !== "informativo" && (
+                <BadgeEstado estado={detalle.estado} goceSueldo={detalle.goceSueldo} />
+                {detalle.resueltoAt && detalle.estado !== "pendiente" && (
                   <span className="text-xs text-[#B89070]">el {formatDate(detalle.resueltoAt)}</span>
                 )}
               </div>
@@ -802,9 +837,9 @@ export default function RRHHPage() {
                   <span className="text-sm text-[#2C1810]">{detalle.respuesta}</span>
                 </div>
               )}
-              {detalle.estado === "informativo" && (
-                <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-xs text-gray-600">
-                  Motivo personal: queda registrado para saber por qué faltó, pero no justifica la falta en la liquidación.
+              {detalle.estado === "aprobado" && detalle.goceSueldo === false && (
+                <div className="bg-sky-50 border border-sky-200 rounded-lg p-3 text-xs text-sky-800">
+                  Sin goce de sueldo: la falta queda justificada (no hace perder el presentismo), pero esos días se descuentan en la liquidación.
                 </div>
               )}
               <div className="flex gap-2">
@@ -896,11 +931,14 @@ export default function RRHHPage() {
         const dias = r.fechaInicio && r.fechaFin ? diasDelRango(r.fechaInicio, r.fechaFin) : null;
         const excedeSaldo = aprobar && r.tipo === "Vacaciones" && r.saldoVacaciones !== null && dias !== null && dias > r.saldoVacaciones;
         const sinCertificado = aprobar && r.tipo === "Enfermedad" && r.archivos.length === 0;
+        const eligeGoce = aprobar && r.tipo === "Motivo Personal";
+        const tituloPedido =
+          r.tipo === "Vacaciones" ? "vacaciones" : r.tipo === "Motivo Personal" ? "motivo personal" : "certificado de enfermedad";
         return (
           <div className="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center p-4" onClick={() => !guardandoDecision && setDecisionEnCurso(null)}>
             <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
               <h2 className="font-bold text-[#2C1810] text-lg">
-                {aprobar ? "Aprobar" : "Rechazar"} {r.tipo === "Vacaciones" ? "vacaciones" : "certificado de enfermedad"}
+                {aprobar ? "Aprobar" : "Rechazar"} {tituloPedido}
               </h2>
               <p className="text-sm text-[#8B6347] mt-1">
                 {r.nombre} · {rangoTexto(r)}
@@ -908,12 +946,39 @@ export default function RRHHPage() {
               </p>
 
               <div className="mt-4 space-y-3">
-                <p className="text-xs text-[#5C3D2E]">
-                  {aprobar
-                    ? "Esos días quedan justificados: no se descuentan en la liquidación" +
-                      (r.tipo === "Vacaciones" ? " y se restan del saldo de vacaciones." : " y el certificado se da por recibido.")
-                    : "Esos días no quedan justificados: si faltó a un turno, se descuenta como falta sin aviso en la liquidación."}
-                </p>
+                {eligeGoce ? (
+                  <div>
+                    <p className="text-xs text-[#8B6347] font-medium mb-1.5">¿Con goce o sin goce de sueldo?</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {([true, false] as const).map((conGoce) => (
+                        <button
+                          key={String(conGoce)}
+                          type="button"
+                          onClick={() => setGoceSueldo(conGoce)}
+                          className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                            goceSueldo === conGoce
+                              ? "border-emerald-500 bg-emerald-50 ring-1 ring-emerald-400"
+                              : "border-[#EDE0CC] hover:border-[#D4A843]"
+                          }`}
+                        >
+                          <span className="block text-sm font-medium text-[#2C1810]">{conGoce ? "Con goce" : "Sin goce"}</span>
+                          <span className="block text-xs text-[#8B6347] mt-0.5">
+                            {conGoce
+                              ? "Se paga: no se descuenta en la liquidación."
+                              : "Queda justificada (no pierde presentismo), pero se descuenta."}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-[#5C3D2E]">
+                    {aprobar
+                      ? "Esos días quedan justificados: no se descuentan en la liquidación" +
+                        (r.tipo === "Vacaciones" ? " y se restan del saldo de vacaciones." : " y el certificado se da por recibido.")
+                      : "Esos días no quedan justificados: si faltó a un turno, se descuenta como falta sin aviso en la liquidación."}
+                  </p>
+                )}
                 {r.tipo === "Vacaciones" && r.saldoVacaciones !== null && (
                   <p className={`text-xs rounded-lg px-3 py-2 border ${excedeSaldo ? "bg-amber-50 border-amber-300 text-amber-800" : "bg-[#FAF7F2] border-[#EDE0CC] text-[#5C3D2E]"}`}>
                     {excedeSaldo ? "⚠ " : ""}Saldo de vacaciones disponible: <strong>{r.saldoVacaciones}</strong> días
@@ -959,7 +1024,7 @@ export default function RRHHPage() {
                 </button>
                 <button
                   onClick={confirmarDecision}
-                  disabled={guardandoDecision}
+                  disabled={guardandoDecision || (eligeGoce && goceSueldo === null)}
                   className={`flex-1 text-white rounded-xl py-2 text-sm font-medium active:scale-95 transition-colors disabled:opacity-50 ${
                     aprobar ? "bg-emerald-600 hover:bg-emerald-700" : "bg-red-500 hover:bg-red-600"
                   }`}

@@ -28,6 +28,7 @@ export interface RegistroRRHH {
   fechaInicio: string | null; // ISO (YYYY-MM-DD)
   fechaFin: string | null;
   estado: EstadoAusencia | null;
+  goceSueldo: boolean | null; // solo Motivo Personal aprobado: con/sin goce de sueldo
   respuesta: string | null; // comentario de RRHH al aprobar/rechazar
   resueltoAt: number | null;
   saldoVacaciones: number | null; // solo Vacaciones pendientes — saldo actual del año del pedido
@@ -50,8 +51,13 @@ export const ESTADO_LABEL: Record<EstadoAusencia, string> = {
   pendiente: "Pendiente",
   aprobado: "Aprobado",
   rechazado: "Rechazado",
-  informativo: "Solo informativo",
 };
+
+// "Aprobado · sin goce" para un Motivo Personal aprobado; si no, el estado a secas.
+export function estadoTexto(estado: EstadoAusencia, goceSueldo: boolean | null): string {
+  if (estado === "aprobado" && goceSueldo !== null) return `Aprobado · ${goceSueldo ? "con goce" : "sin goce"}`;
+  return ESTADO_LABEL[estado];
+}
 
 const AR_TZ = "America/Argentina/Buenos_Aires";
 
@@ -151,5 +157,6 @@ export interface EventoCalendario {
   sucursal: string | null;
   tipo: TipoCalendario;
   estado: EstadoAusencia;
+  goceSueldo: boolean | null;
   registroId: number; // id del registro del panel (para abrir el detalle)
 }

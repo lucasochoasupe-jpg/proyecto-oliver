@@ -74,6 +74,8 @@ export interface ComprobanteInformalData {
   sueldo_o_jornal: number; // valor nominal
   descuento_tardanza: number;
   descuento_ausencia: number;
+  descuento_sin_goce: number; // motivo personal aprobado sin goce de sueldo
+  monto_ausencia_justificada: number; // faltas con goce pagadas: horas del turno × valor hora (solo por día)
   horas_extra_monto: number; // horas_extra × valor_hora, ya en pesos (0 si no aplica)
   adelantos: number; // adelantos que quedaron a cargo de esta parte
   total: number;
@@ -614,8 +616,10 @@ export function generarComprobanteInformalPdf(data: ComprobanteInformalData): Pr
       data.tipo_pago === "mensual" ? "Sueldo Mensual (informal)" : data.tipo_pago === "hora" ? "Valor Hora (informal)" : "Jornal (informal)";
     const filas: string[][] = [[labelBase, formatARS(data.sueldo_o_jornal)]];
     if (data.horas_extra_monto > 0) filas.push(["Horas extra", `+ ${formatARS(data.horas_extra_monto)}`]);
+    if (data.monto_ausencia_justificada > 0) filas.push(["Ausencias justificadas con goce", `+ ${formatARS(data.monto_ausencia_justificada)}`]);
     if (data.descuento_tardanza > 0) filas.push(["Descuento por tardanzas", `- ${formatARS(data.descuento_tardanza)}`]);
     if (data.descuento_ausencia > 0) filas.push(["Descuento por ausencias", `- ${formatARS(data.descuento_ausencia)}`]);
+    if (data.descuento_sin_goce > 0) filas.push(["Licencia sin goce de sueldo", `- ${formatARS(data.descuento_sin_goce)}`]);
     if (data.adelantos > 0) filas.push(["Adelantos del período", `- ${formatARS(data.adelantos)}`]);
 
     y = dibujarTabla(

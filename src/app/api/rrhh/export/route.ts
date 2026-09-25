@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import { COLOR, fill, zebraFill, configurarColumnas, estilarHeader, aplicarGrilla, estilarFilaTotal, agregarBranding, ajustarAnchoContenido } from "@/lib/excel-style";
 import { listarRegistrosRRHH } from "@/lib/rrhh-registros";
-import { ESTADO_LABEL, filtrarRegistros, paramsAFiltros, rangoTexto } from "@/lib/rrhh-shared";
+import { estadoTexto, filtrarRegistros, paramsAFiltros, rangoTexto } from "@/lib/rrhh-shared";
 
 export const dynamic = "force-dynamic";
 
@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
       tipo:     a.tipo,
       motivo:   a.motivo,
       rango:    rangoTexto(a) ?? "—",
-      estado:   a.estado ? ESTADO_LABEL[a.estado] : "—",
+      estado:   a.estado ? estadoTexto(a.estado, a.goceSueldo) : "—",
       fecha:    fechaStr,
       hora:     horaStr,
       cert:     a.certificadoPendiente ? "⚠ Pendiente" : a.certificadoRecibidoEn ? "Recibido" : "—",

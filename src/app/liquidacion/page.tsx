@@ -20,6 +20,12 @@ interface ParteDetalle {
   descuento_ausencia: number;
   dias_ausencia_justificada: number;
   horas_ausencia_justificada: number;
+  dias_sin_goce: number;
+  horas_sin_goce: number;
+  descuento_sin_goce: number;
+  dias_justificados_pagos: number;
+  horas_justificadas_pagas: number;
+  monto_ausencia_justificada: number;
   dias_trabajados: number | null;
   horas_extra: number | null;
   total_por_horas: number | null;
@@ -114,8 +120,15 @@ function DetalleParte({ p }: { p: ParteDetalle }) {
               </p>
               {p.dias_ausencia_justificada > 0 && (
                 <p className="text-emerald-700">
-                  ✓ Ausencias justificadas (avisadas): {p.dias_ausencia_justificada} día
+                  ✓ Ausencias justificadas con goce: {p.dias_ausencia_justificada} día
                   {p.dias_ausencia_justificada === 1 ? "" : "s"}
+                  {p.monto_ausencia_justificada > 0 &&
+                    ` — se pagan las horas del turno (${formatHoras(p.horas_justificadas_pagas)} × ${p.valor_hora ? formatMoneda(p.valor_hora) : "—"} = + ${formatMoneda(p.monto_ausencia_justificada)})`}
+                </p>
+              )}
+              {p.dias_sin_goce > 0 && (
+                <p className="text-sky-700">
+                  Motivo personal sin goce: {p.dias_sin_goce} día{p.dias_sin_goce === 1 ? "" : "s"} — no genera jornal ese día
                 </p>
               )}
             </>
@@ -149,6 +162,13 @@ function DetalleParte({ p }: { p: ParteDetalle }) {
               ✓ Ausencias justificadas (avisadas): {p.dias_ausencia_justificada} día
               {p.dias_ausencia_justificada === 1 ? "" : "s"}
               {p.horas_ausencia_justificada > 0 && ` (${formatHoras(p.horas_ausencia_justificada)})`} — no se descuentan
+            </p>
+          )}
+          {p.dias_sin_goce > 0 && (
+            <p className="text-sky-700">
+              Motivo personal sin goce: {p.dias_sin_goce} día{p.dias_sin_goce === 1 ? "" : "s"}
+              {p.horas_sin_goce > 0 && ` (${formatHoras(p.horas_sin_goce)})`}
+              {p.descuento_sin_goce > 0 && ` (- ${formatMoneda(p.descuento_sin_goce)})`} — justificada, no pierde presentismo
             </p>
           )}
         </>
@@ -456,10 +476,12 @@ function LiquidacionMensual() {
                 const descuentos =
                   f.descuento_tardanza +
                   f.descuento_ausencia +
+                  f.descuento_sin_goce +
                   f.adelantos +
                   (f.legal?.total_aportes_empleado ?? 0) +
                   (f.informal?.descuento_tardanza ?? 0) +
-                  (f.informal?.descuento_ausencia ?? 0);
+                  (f.informal?.descuento_ausencia ?? 0) +
+                  (f.informal?.descuento_sin_goce ?? 0);
                 return (
                   <Fragment key={f.empleado_id}>
                     <tr

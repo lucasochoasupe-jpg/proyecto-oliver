@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import EmpleadoMultiSelect from "@/components/EmpleadoMultiSelect";
-import { ESTADO_LABEL, hoyAR, type EventoCalendario, type TipoCalendario } from "@/lib/rrhh-shared";
+import { estadoTexto, hoyAR, type EventoCalendario, type TipoCalendario } from "@/lib/rrhh-shared";
 
 const TIPOS_CAL: TipoCalendario[] = ["Vacaciones", "Enfermedad", "Motivo Personal"];
 
@@ -239,7 +239,7 @@ export default function CalendarioFaltas({ sucursales, onVerRegistro }: Props) {
                   {lista.slice(0, 3).map((e, j) => (
                     <span
                       key={j}
-                      title={`${e.nombre} — ${e.tipo} (${ESTADO_LABEL[e.estado]})`}
+                      title={`${e.nombre} — ${e.tipo} (${estadoTexto(e.estado, e.goceSueldo)})`}
                       className={`text-[11px] leading-tight px-1.5 py-0.5 rounded flex flex-col min-w-0 ${chipClase(e)}`}
                     >
                       <span className="truncate">{e.nombre}</span>
@@ -289,7 +289,7 @@ export default function CalendarioFaltas({ sucursales, onVerRegistro }: Props) {
                   <div className="flex items-center gap-2">
                     <span className={`text-xs px-2 py-0.5 rounded-full ${chipClase(e)}`}>
                       {e.tipo}
-                      {e.estado !== "informativo" ? ` · ${ESTADO_LABEL[e.estado]}` : ""}
+                      {` · ${estadoTexto(e.estado, e.goceSueldo)}`}
                     </span>
                     <button
                       onClick={() => onVerRegistro(e.registroId)}

@@ -49,14 +49,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "El rango de fechas es inválido" }, { status: 400 });
   }
 
-  // Lo carga el propio admin, así que ya entra decidido: Vacaciones aprobadas;
-  // Enfermedad aprobada si ya trajo el certificado, si no queda pendiente
-  // hasta que lo presente; Motivo Personal es solo informativo.
-  const estado: EstadoAusencia =
-    categoria === "Motivo Personal" ? "informativo" : certificadoPendiente ? "pendiente" : "aprobado";
+  // Lo carga el propio admin, así que ya entra decidido: Vacaciones y Motivo
+  // Personal (con o sin goce, elegido en el form) aprobados; Enfermedad
+  // aprobada si ya trajo el certificado, si no queda pendiente hasta que lo
+  // presente.
+  const goceSueldo = categoria === "Motivo Personal" && typeof body?.goceSueldo === "boolean" ? body.goceSueldo : null;
+  if (categoria === "Motivo Personal" && goceSueldo === null) {
+    return NextResponse.json({ error: "Elegí si es con goce o sin goce de sueldo" }, { status: 400 });
+  }
+  const estado: EstadoAusencia = certificadoPendiente ? "pendiente" : "aprobado";
 
   const id = crearAusenciaReportada({
     estado,
+    goceSueldo,
     empleadoNombre: empleado.nombre,
     categoria,
     fechaInicio,

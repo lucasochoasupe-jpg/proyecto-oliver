@@ -90,6 +90,8 @@ export function construirComprobanteInformal(
     sueldo_o_jornal: sueldoONormal,
     descuento_tardanza: p.descuento_tardanza,
     descuento_ausencia: p.descuento_ausencia,
+    descuento_sin_goce: p.descuento_sin_goce,
+    monto_ausencia_justificada: p.monto_ausencia_justificada,
     horas_extra_monto: horasExtraMonto,
     adelantos: fila.adelantos_informal,
     total: p.total,
