@@ -16,6 +16,11 @@ import {
   getCertificadoPendientePorId,
   crearAusenciaReportada,
   calcularSaldoVacaciones,
+  getEmpleadoByNombre,
+  viernesDeEntregaAdelanto,
+  pedidoAdelantoPendiente,
+  topeParaPedidoAdelanto,
+  guardarPedidoAdelanto,
   type Conversation,
   type CertificadoPendiente,
 } from "./db";
@@ -44,6 +49,8 @@ type Step =
   | "certificado_elegir"
   | "certificado_esperando_archivo"
   | "certificado_inline_esperando_archivo"
+  | "adelanto_monto"
+  | "adelanto_confirmar"
   | "cierre";
 
 interface RRHHState {
@@ -55,6 +62,7 @@ interface RRHHState {
   fechaInicio?: string;
   fechaFin?: string;
   certificadoPendienteId?: number;
+  adelantoMonto?: number;
 }
 
 const FLOW = "rrhh";
@@ -125,8 +133,9 @@ function menuEmpleados(): string {
     "* [1] Notificar Ausencia / Certificado\n" +
     "* [2] Solicitar Vacaciones\n" +
     "* [3] Urgencia\n" +
-    "* [4] Entregar certificado pendiente\n\n" +
-    "Aclaración: si tu consulta es por sueldos, adelantos, cambios de horario, etc., se tiene que gestionar de forma presencial.\n\n" +
+    "* [4] Entregar certificado pendiente\n" +
+    "* [5] Pedir un adelanto de sueldo\n\n" +
+    "Aclaración: si tu consulta es por sueldos, cambios de horario, etc., se tiene que gestionar de forma presencial.\n\n" +
     '(Escribí "volver" para ver este menú en cualquier momento, o "cancelar" para salir.)'
   );
 }
@@ -210,6 +219,40 @@ function cierrePrompt(): string {
     "¿Necesitás algo más?\n" +
     "* [1] Hacer otra consulta\n" +
     "* [2] Dar por terminada la conversación"
+  );
+}
+
+// ── Adelantos ─────────────────────────────────────────────────────────────────
+
+function formatPesos(n: number): string {
+  return "$" + Math.round(n).toLocaleString("es-AR");
+}
+
+// "50000", "50.000", "$ 50.000", "50000,00", "50 mil" → número; null si no se entiende.
+function parseMonto(raw: string): number | null {
+  const low = raw.toLowerCase().replace(/\$/g, "").trim();
+  const mil = low.match(/^(\d+(?:[.,]\d+)?)\s*(mil|k)$/);
+  if (mil) return Math.round(Number(mil[1].replace(",", ".")) * 1000);
+  const limpio = low.replace(/\s/g, "").replace(/,\d{1,2}$/, "").replace(/[.,]/g, "");
+  if (!/^\d+$/.test(limpio)) return null;
+  const n = Number(limpio);
+  return n > 0 ? n : null;
+}
+
+function adelantoMontoPrompt(intro: string): string {
+  return (
+    intro +
+    "¿Cuánto querés pedir? Escribí solo el monto, por ejemplo: *50000*\n\n" +
+    '(Escribí "volver" para regresar al menú principal.)'
+  );
+}
+
+function adelantoConfirmarPrompt(monto: number, fechaPago: string): string {
+  return (
+    `Vas a pedir un adelanto de *${formatPesos(monto)}* para el *viernes ${formatFechaCorta(fechaPago)}*.\n` +
+    "* [1] Confirmar\n" +
+    "* [2] Cambiar el monto\n" +
+    "* [3] Volver al menú principal"
   );
 }
 
@@ -365,7 +408,7 @@ export async function handleRRHH(
 
   // "volver" global (solo tiene sentido una vez registrado)
   if (low === "volver" && state.nombre && state.sucursal) {
-    touch({ step: "menu", categoria: undefined, certificado: undefined, fechaInicio: undefined, fechaFin: undefined });
+    touch({ step: "menu", categoria: undefined, certificado: undefined, fechaInicio: undefined, fechaFin: undefined, adelantoMonto: undefined });
     await reply(menuEmpleados());
     return;
   }
@@ -427,7 +470,94 @@ export async function handleRRHH(
         await reply(certificadoElegirPrompt(pendientes));
         return;
       }
+      if (raw === "5") {
+        const intro = introAdelanto(state.nombre as string);
+        if (intro.bloqueado) {
+          await reply(`${intro.texto}\n\n${menuEmpleados()}`);
+          return;
+        }
+        touch({ step: "adelanto_monto", adelantoMonto: undefined });
+        await reply(adelantoMontoPrompt(intro.texto));
+        return;
+      }
       await reply(`Elegí una opción válida.\n\n${menuEmpleados()}`);
+      return;
+    }
+
+    case "adelanto_monto": {
+      const monto = parseMonto(raw);
+      if (monto === null) {
+        await reply(adelantoMontoPrompt("No entendí el monto. "));
+        return;
+      }
+      const emp = getEmpleadoByNombre(state.nombre as string);
+      if (!emp) {
+        touch({ step: "menu" });
+        await reply(`No encontré tu ficha de empleado. Consultá con Administración.\n\n${menuEmpleados()}`);
+        return;
+      }
+      const { fechaPago } = viernesDeEntregaAdelanto();
+      const previo = pedidoAdelantoPendiente(emp.id, fechaPago);
+      const tope = topeParaPedidoAdelanto(emp.id, fechaPago, previo?.id);
+      if (tope.disponible !== null && monto > tope.disponible) {
+        await reply(
+          adelantoMontoPrompt(
+            `Ese monto supera lo que podés pedir este mes: tu tope disponible es *${formatPesos(Math.max(0, tope.disponible))}*. `
+          )
+        );
+        return;
+      }
+      touch({ step: "adelanto_confirmar", adelantoMonto: monto });
+      await reply(adelantoConfirmarPrompt(monto, fechaPago));
+      return;
+    }
+
+    case "adelanto_confirmar": {
+      if (raw === "2") {
+        touch({ step: "adelanto_monto", adelantoMonto: undefined });
+        await reply(adelantoMontoPrompt(""));
+        return;
+      }
+      if (raw === "3") {
+        touch({ step: "menu", adelantoMonto: undefined });
+        await reply(menuEmpleados());
+        return;
+      }
+      if (raw !== "1" || !state.adelantoMonto) {
+        const { fechaPago } = viernesDeEntregaAdelanto();
+        await reply(`Elegí una opción válida.\n\n${adelantoConfirmarPrompt(state.adelantoMonto ?? 0, fechaPago)}`);
+        return;
+      }
+      const emp = getEmpleadoByNombre(state.nombre as string);
+      if (!emp) {
+        touch({ step: "menu" });
+        await reply(`No encontré tu ficha de empleado. Consultá con Administración.\n\n${menuEmpleados()}`);
+        return;
+      }
+      // Se recalcula el viernes al confirmar: si entre el monto y la
+      // confirmación pasó el cierre del jueves 14 h, va al viernes siguiente.
+      const { fechaPago } = viernesDeEntregaAdelanto();
+      const numeroVinculado = getEmpleadoByJid(phone)?.id === emp.id;
+      const { pedido, reemplazo } = guardarPedidoAdelanto({
+        empleadoId: emp.id,
+        monto: state.adelantoMonto,
+        fechaPago,
+        phone,
+        numeroVinculado,
+      });
+      avisarAdministracion(
+        `💸 *Pedido de adelanto*${reemplazo ? " (cambió el monto)" : ""}: ${emp.nombre}${state.sucursal ? ` (${state.sucursal})` : ""} ` +
+          `pide *${formatPesos(pedido.monto)}* para el viernes ${formatFechaCorta(fechaPago)}.` +
+          (numeroVinculado ? "" : " ⚠ Lo pidió desde un número que no está vinculado a su ficha: verificar.") +
+          "\nAprobalo o rechazalo en el panel: Finanzas → Adelantos."
+      );
+      touch({ step: "cierre", adelantoMonto: undefined });
+      await reply(
+        `Listo ✅ Registré tu pedido de *${formatPesos(pedido.monto)}* para el *viernes ${formatFechaCorta(fechaPago)}*` +
+          (reemplazo ? " (reemplaza al pedido que tenías para ese viernes)" : "") +
+          ". Administración lo tiene que aprobar; te aviso por acá cuando lo revisen.\n\n" +
+          cierrePrompt()
+      );
       return;
     }
 
@@ -589,6 +719,49 @@ export async function handleRRHH(
       return;
     }
   }
+}
+
+// ── Pedido de adelanto: textos que dependen de la fecha y el tope ─────────────
+
+// Texto de entrada al pedido: cuándo se entrega, el recordatorio del cierre
+// (jueves 14 h) y cuánto puede pedir. `bloqueado` si ya no le queda tope.
+function introAdelanto(nombre: string): { texto: string; bloqueado: boolean } {
+  const { fechaPago, pasoElCierreDeEstaSemana } = viernesDeEntregaAdelanto();
+  const cierre =
+    "Recordá que los adelantos se piden hasta el *jueves a las 14 h* y se entregan el *viernes*.\n";
+  const cuando = pasoElCierreDeEstaSemana
+    ? `Ya pasó el cierre de esta semana, así que tu pedido queda para el *viernes ${formatFechaCorta(fechaPago)}*.\n`
+    : `Tu pedido es para el *viernes ${formatFechaCorta(fechaPago)}*.\n`;
+
+  const emp = getEmpleadoByNombre(nombre);
+  let topeTxt = "";
+  let bloqueado = false;
+  if (emp) {
+    const previo = pedidoAdelantoPendiente(emp.id, fechaPago);
+    const tope = topeParaPedidoAdelanto(emp.id, fechaPago, previo?.id);
+    if (previo) topeTxt += `Ya tenés un pedido de *${formatPesos(previo.monto)}* pendiente para ese viernes; si mandás otro monto, lo reemplaza.\n`;
+    if (tope.disponible !== null) {
+      if (tope.disponible <= 0) {
+        bloqueado = true;
+        topeTxt += `Ya usaste todo el tope de adelantos de este mes (${formatPesos(tope.limite ?? 0)}, el 20% del sueldo). Consultá con Administración.`;
+      } else {
+        topeTxt += `Este mes podés pedir hasta *${formatPesos(tope.disponible)}*.\n`;
+      }
+    }
+  }
+  if (bloqueado) return { texto: `💸 *Pedido de adelanto*\n${topeTxt}`, bloqueado };
+  return { texto: `💸 *Pedido de adelanto*\n${cierre}${cuando}${topeTxt}\n`, bloqueado };
+}
+
+function avisarAdministracion(texto: string): void {
+  const adminPhone = process.env.ADMIN_PHONE;
+  if (!adminPhone) {
+    console.warn("[adelantos] ADMIN_PHONE no configurado — no se pudo avisar:", texto);
+    return;
+  }
+  const adminConvo = getOrCreateConversation(adminPhone);
+  insertMessage(adminConvo.id, "assistant", texto);
+  enqueueOutbox(adminConvo.id, adminPhone, texto);
 }
 
 // ── Generación del aviso a Administración ─────────────────────────────────────

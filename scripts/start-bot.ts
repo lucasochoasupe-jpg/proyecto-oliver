@@ -10,6 +10,7 @@ import {
   getConnectionState,
 } from "../src/lib/db";
 import { revisarParitarias } from "../src/lib/paritarias";
+import { enviarResumenAdelantosSiCorresponde } from "../src/lib/avisos-adelantos";
 
 const RESTART_FLAG = path.resolve(process.cwd(), "data", ".restart");
 const AUTH_DIR = path.resolve(process.cwd(), "auth");
@@ -65,6 +66,15 @@ const revisarParitariasSeguro = () =>
   revisarParitarias().catch((err) => console.error("[paritarias] Error revisando:", err));
 setTimeout(revisarParitariasSeguro, 60_000);
 setInterval(revisarParitariasSeguro, 6 * 3600_000);
+
+// ── Resumen de pedidos de adelanto (jueves 14 h) ──────────────────────────────
+setInterval(() => {
+  try {
+    enviarResumenAdelantosSiCorresponde();
+  } catch (err) {
+    console.error("[adelantos] Error en el resumen semanal:", err);
+  }
+}, 10 * 60_000);
 
 // ── Arranque inicial ──────────────────────────────────────────────────────────
 console.log("[bot] Iniciando agente WhatsApp...");

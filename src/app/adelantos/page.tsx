@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import PageHeader from "@/components/PageHeader";
+import PedidosWhatsApp from "./PedidosWhatsApp";
 
 interface Empleado {
   id: number;
@@ -212,6 +213,7 @@ export default function AdelantosPage() {
       <PageHeader subtitle="Adelantos" />
 
       <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
+        <PedidosWhatsApp onCambio={fetchAdelantos} />
         <div>
           <h1 className="text-xl font-bold text-[#2C1810]">Adelantos</h1>
           <p className="text-sm text-[#8B6347] mt-0.5">

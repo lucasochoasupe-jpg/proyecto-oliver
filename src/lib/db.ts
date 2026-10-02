@@ -156,6 +156,29 @@ try { db.exec("ALTER TABLE empleados ADD COLUMN fecha_alta TEXT"); } catch {}
 }
 try { db.exec("ALTER TABLE empleados ADD COLUMN categoria_id INTEGER REFERENCES categorias_convenio(id)"); } catch {}
 
+// Pedidos de adelanto que los empleados hacen por WhatsApp (ver
+// rrhh-flow.ts): quedan 'pendiente' hasta que Administración los aprueba
+// (se crea el adelanto, con fecha = viernes de entrega) o los rechaza desde
+// el panel. Se piden hasta el jueves a las 14 para cobrarlos ese viernes.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS pedidos_adelanto (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    empleado_id INTEGER NOT NULL REFERENCES empleados(id),
+    monto REAL NOT NULL,
+    fecha_pago TEXT NOT NULL, -- viernes de entrega (YYYY-MM-DD)
+    phone TEXT NOT NULL, -- desde dónde se pidió (para avisar la respuesta)
+    numero_vinculado INTEGER NOT NULL DEFAULT 0, -- 1 si el teléfono es el vinculado al empleado
+    estado TEXT NOT NULL DEFAULT 'pendiente', -- pendiente | aprobado | rechazado
+    monto_aprobado REAL,
+    respuesta TEXT,
+    adelanto_id INTEGER REFERENCES adelantos(id),
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    resuelto_at INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_pedidos_adelanto_estado ON pedidos_adelanto(estado, fecha_pago);
+  CREATE TABLE IF NOT EXISTS sistema_kv (clave TEXT PRIMARY KEY, valor TEXT NOT NULL);
+`);
+
 // PDFs de escalas publicados en la web de AIPAR (ver src/lib/paritarias.ts):
 // cada uno nuevo queda 'pendiente' hasta que alguien carga la escala (o lo
 // descarta), y mientras tanto se le recuerda a Administración por WhatsApp.
@@ -1428,7 +1451,12 @@ const TOPE_ADELANTO_PORCENTAJE = 0.2;
 // Base sobre la que se calcula el tope de adelantos: el sueldo mensual para
 // empleados mensuales, o el sueldo estimado que carga el admin para empleados
 // por hora/día (que no tienen un sueldo fijo del cual derivarlo).
-function sueldoBaseParaAdelantos(emp: Empleado): number | null {
+function sueldoBaseParaAdelantos(emp: Empleado, fecha: string): number | null {
+  // Con categoría de convenio, el sueldo en blanco sale de la escala vigente.
+  if (emp.categoria_id !== null) {
+    const escala = escalaVigente(emp.categoria_id, fecha.slice(0, 7));
+    if (escala) return escala.basico * emp.fraccion_jornada;
+  }
   return emp.tipo_pago === "mensual" ? emp.sueldo_mensual : emp.sueldo_estimado;
 }
 
@@ -1453,7 +1481,7 @@ export interface TopeAdelantoInfo {
 // formulario antes de cargarlo.
 export function calcularTopeAdelanto(empleadoId: number, fecha: string): TopeAdelantoInfo {
   const emp = getEmpleadoById(empleadoId);
-  const base = emp ? sueldoBaseParaAdelantos(emp) : null;
+  const base = emp ? sueldoBaseParaAdelantos(emp, fecha) : null;
   const limite = base !== null ? base * TOPE_ADELANTO_PORCENTAJE : null;
   const { desde, hasta } = limitesDelMes(fecha);
   const usado = listAdelantos({ empleadoId, desde, hasta }).reduce((acc, a) => acc + a.monto, 0);
@@ -1464,6 +1492,155 @@ export function calcularTopeAdelanto(empleadoId: number, fecha: string): TopeAde
     disponible: limite !== null ? limite - usado : null,
     excedido: limite !== null && usado > limite,
   };
+}
+
+// ── Pedidos de adelanto por WhatsApp ────────────────────────────────────
+
+const AR_OFFSET_ADELANTOS_SEC = 3 * 3600;
+
+// Viernes en que se entrega un adelanto pedido en `ahoraSec`: los pedidos
+// cierran el jueves a las 14 (hora AR) y se pagan al día siguiente. Pasado
+// ese cierre, el pedido queda para el viernes de la semana siguiente.
+export function viernesDeEntregaAdelanto(ahoraSec: number = Math.floor(Date.now() / 1000)): {
+  fechaPago: string;
+  cierre: string; // jueves de cierre (YYYY-MM-DD)
+  pasoElCierreDeEstaSemana: boolean;
+} {
+  const ar = new Date((ahoraSec - AR_OFFSET_ADELANTOS_SEC) * 1000);
+  const dia = ar.getUTCDay(); // 0 dom … 4 jue, 5 vie
+  const minutos = ar.getUTCHours() * 60 + ar.getUTCMinutes();
+  let diasHastaJueves = (4 - dia + 7) % 7;
+  let pasoElCierre = false;
+  if (diasHastaJueves === 0 && minutos >= 14 * 60) {
+    diasHastaJueves = 7;
+    pasoElCierre = true;
+  }
+  if (dia === 5) pasoElCierre = true; // viernes: el cierre fue ayer
+  const jueves = new Date(Date.UTC(ar.getUTCFullYear(), ar.getUTCMonth(), ar.getUTCDate() + diasHastaJueves));
+  const viernes = new Date(jueves.getTime() + 86400000);
+  return {
+    fechaPago: viernes.toISOString().slice(0, 10),
+    cierre: jueves.toISOString().slice(0, 10),
+    pasoElCierreDeEstaSemana: pasoElCierre,
+  };
+}
+
+export interface PedidoAdelanto {
+  id: number;
+  empleado_id: number;
+  empleado_nombre: string;
+  monto: number;
+  fecha_pago: string;
+  phone: string;
+  numero_vinculado: number;
+  estado: "pendiente" | "aprobado" | "rechazado";
+  monto_aprobado: number | null;
+  respuesta: string | null;
+  adelanto_id: number | null;
+  created_at: number;
+  resuelto_at: number | null;
+}
+
+const SELECT_PEDIDO = `SELECT p.*, e.nombre AS empleado_nombre FROM pedidos_adelanto p JOIN empleados e ON e.id = p.empleado_id`;
+
+export function getPedidoAdelanto(id: number): PedidoAdelanto | null {
+  return (db.prepare(`${SELECT_PEDIDO} WHERE p.id = ?`).get(id) as unknown as PedidoAdelanto | undefined) ?? null;
+}
+
+export function pedidoAdelantoPendiente(empleadoId: number, fechaPago: string): PedidoAdelanto | null {
+  return (
+    (db
+      .prepare(`${SELECT_PEDIDO} WHERE p.empleado_id = ? AND p.fecha_pago = ? AND p.estado = 'pendiente' ORDER BY p.id DESC LIMIT 1`)
+      .get(empleadoId, fechaPago) as unknown as PedidoAdelanto | undefined) ?? null
+  );
+}
+
+// Pendientes primero; después los resueltos de los últimos 30 días.
+export function listPedidosAdelanto(): PedidoAdelanto[] {
+  return db
+    .prepare(
+      `${SELECT_PEDIDO}
+       WHERE p.estado = 'pendiente' OR p.resuelto_at >= unixepoch() - 30 * 86400
+       ORDER BY (p.estado = 'pendiente') DESC, p.fecha_pago DESC, p.created_at DESC`
+    )
+    .all() as unknown as PedidoAdelanto[];
+}
+
+// Crea el pedido, o si ya hay uno pendiente para ese viernes le cambia el monto.
+export function guardarPedidoAdelanto(data: {
+  empleadoId: number;
+  monto: number;
+  fechaPago: string;
+  phone: string;
+  numeroVinculado: boolean;
+}): { pedido: PedidoAdelanto; reemplazo: boolean } {
+  const existente = pedidoAdelantoPendiente(data.empleadoId, data.fechaPago);
+  if (existente) {
+    db.prepare("UPDATE pedidos_adelanto SET monto = ?, phone = ?, numero_vinculado = ?, created_at = unixepoch() WHERE id = ?").run(
+      data.monto,
+      data.phone,
+      data.numeroVinculado ? 1 : 0,
+      existente.id
+    );
+    return { pedido: getPedidoAdelanto(existente.id)!, reemplazo: true };
+  }
+  const info = db
+    .prepare("INSERT INTO pedidos_adelanto (empleado_id, monto, fecha_pago, phone, numero_vinculado) VALUES (?, ?, ?, ?, ?)")
+    .run(data.empleadoId, data.monto, data.fechaPago, data.phone, data.numeroVinculado ? 1 : 0);
+  return { pedido: getPedidoAdelanto(Number(info.lastInsertRowid))!, reemplazo: false };
+}
+
+// Tope del 20% del mes de entrega, contando también los pedidos todavía
+// pendientes (para que no se pueda pedir de nuevo lo mismo antes de que se
+// apruebe el primero). `excluirPedidoId`: el pedido que se está reemplazando.
+export function topeParaPedidoAdelanto(empleadoId: number, fechaPago: string, excluirPedidoId?: number): TopeAdelantoInfo {
+  const tope = calcularTopeAdelanto(empleadoId, fechaPago);
+  const { desde, hasta } = limitesDelMes(fechaPago);
+  const pendiente = (
+    db
+      .prepare(
+        "SELECT COALESCE(SUM(monto), 0) AS s FROM pedidos_adelanto WHERE empleado_id = ? AND estado = 'pendiente' AND fecha_pago BETWEEN ? AND ? AND id <> ?"
+      )
+      .get(empleadoId, desde, hasta, excluirPedidoId ?? 0) as { s: number }
+  ).s;
+  const usado = tope.usado + pendiente;
+  return { ...tope, usado, disponible: tope.limite !== null ? tope.limite - usado : null, excedido: tope.limite !== null && usado > tope.limite };
+}
+
+// Aprobar crea el adelanto (fecha = viernes de entrega) por el monto aprobado
+// (puede ser menor al pedido); rechazar solo cierra el pedido.
+export function decidirPedidoAdelanto(
+  id: number,
+  decision: "aprobado" | "rechazado",
+  montoAprobado: number | null,
+  respuesta: string | null
+): PedidoAdelanto | null {
+  const pedido = getPedidoAdelanto(id);
+  if (!pedido || pedido.estado !== "pendiente") return null;
+  return withTransaction(() => {
+    let adelantoId: number | null = null;
+    const monto = decision === "aprobado" ? montoAprobado ?? pedido.monto : null;
+    if (decision === "aprobado") {
+      adelantoId = crearAdelanto({
+        empleadoId: pedido.empleado_id,
+        fecha: pedido.fecha_pago,
+        monto: monto!,
+        nota: "Pedido por WhatsApp",
+      }).id;
+    }
+    db.prepare(
+      "UPDATE pedidos_adelanto SET estado = ?, monto_aprobado = ?, respuesta = ?, adelanto_id = ?, resuelto_at = unixepoch() WHERE id = ?"
+    ).run(decision, monto, respuesta, adelantoId, id);
+    return getPedidoAdelanto(id);
+  });
+}
+
+export function getSistemaKV(clave: string): string | null {
+  return (db.prepare("SELECT valor FROM sistema_kv WHERE clave = ?").get(clave) as { valor: string } | undefined)?.valor ?? null;
+}
+
+export function setSistemaKV(clave: string, valor: string): void {
+  db.prepare("INSERT INTO sistema_kv (clave, valor) VALUES (?, ?) ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor").run(clave, valor);
 }
 
 export function eliminarLegajoArchivo(id: number): boolean {
