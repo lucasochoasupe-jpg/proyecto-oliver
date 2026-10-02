@@ -3133,7 +3133,8 @@ function horasPactadasEnFecha(ctx: Pick<ParteContexto, "horariosEmp" | "puntuale
 }
 
 // Horas extra del empleado: lo fichado por encima del turno pactado cada día
-// (un día sin turno pactado cuenta entero). Se calculan una sola vez por
+// (un día sin turno pactado cuenta entero), redondeado hacia abajo a la media
+// hora en cada día. Se calculan una sola vez por
 // empleado — no por parte — y se pagan SIEMPRE en negro (sumadas a lo
 // informal) a valor hora simple, nunca en el recibo. Solo para "mensual" y
 // "dia" con horario cargado: "hora" ya cobra todo lo fichado, y sin horario
@@ -3156,7 +3157,10 @@ function calcularHorasExtra(
   }
   let horas = 0;
   for (const [fecha, horasDia] of horasTrabajadasPorFecha(ctx.turnosEmp)) {
-    horas += Math.max(0, horasDia - horasPactadasEnFecha(ctx, fecha));
+    // Se pagan por medias horas completas, día por día: menos de 30 min no
+    // cuenta, y lo que sobre de la última media hora se descarta.
+    const extraDia = Math.max(0, horasDia - horasPactadasEnFecha(ctx, fecha));
+    horas += Math.floor(extraDia * 2 + 1e-9) / 2;
   }
   // Solo suma el valor hora de las partes que el empleado tiene configuradas
   // (puede quedar un valor_hora_informal viejo en la ficha sin parte informal).
