@@ -36,6 +36,7 @@ interface Empleado {
   categoria_id: number | null;
   fraccion_jornada: number;
   modo_informal: "adicional" | "complemento";
+  modo_horas_extra: "informal" | "recibo" | "a_definir";
   contacto_emergencia_nombre: string | null;
   contacto_emergencia_telefono: string | null;
   cbu: string | null;
@@ -151,6 +152,7 @@ export default function EmpleadosPage() {
         categoria_id: string;
         fraccion_jornada_pct: string;
         modo_informal: "adicional" | "complemento";
+        modo_horas_extra: "informal" | "recibo" | "a_definir";
       }
     >
   >({});
@@ -234,6 +236,7 @@ export default function EmpleadosPage() {
         categoria_id: e.categoria_id !== null ? String(e.categoria_id) : "",
         fraccion_jornada_pct: String(Math.round(e.fraccion_jornada * 10000) / 100),
         modo_informal: e.modo_informal,
+        modo_horas_extra: e.modo_horas_extra,
       },
     }));
   }
@@ -283,6 +286,7 @@ export default function EmpleadosPage() {
         categoria_id: e.categoria_id ? Number(e.categoria_id) : null,
         fraccion_jornada: Number(e.fraccion_jornada_pct) > 0 ? Number(e.fraccion_jornada_pct) / 100 : 1,
         modo_informal: e.modo_informal,
+        modo_horas_extra: e.modo_horas_extra,
       }),
     });
     await fetchData();
@@ -359,6 +363,7 @@ export default function EmpleadosPage() {
       categoria_id: null,
       fraccion_jornada: 1,
       modo_informal: "adicional",
+      modo_horas_extra: "informal",
     };
     setNuevoApellido("");
     setNuevoNombrePila("");
@@ -1196,6 +1201,22 @@ export default function EmpleadosPage() {
                       >
                         <option value="adicional">Se suma aparte del recibo</option>
                         <option value="complemento">Completa hasta el total pactado (total − neto del recibo)</option>
+                      </select>
+                    </Campo>
+                    <Campo label="Horas extra" className="col-span-2">
+                      <select
+                        value={ed.modo_horas_extra}
+                        onChange={(e) =>
+                          setEditando((p) => ({
+                            ...p,
+                            [emp.id]: { ...p[emp.id], modo_horas_extra: e.target.value as "informal" | "recibo" | "a_definir" },
+                          }))
+                        }
+                        className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] bg-white"
+                      >
+                        <option value="informal">En negro, como hora normal</option>
+                        <option value="recibo">En el recibo, legal (50% hábiles / 100% sáb. +13 h, dom. y feriados)</option>
+                        <option value="a_definir">A definir (no se pagan, solo se informan)</option>
                       </select>
                     </Campo>
                     <Campo label="Jornada">

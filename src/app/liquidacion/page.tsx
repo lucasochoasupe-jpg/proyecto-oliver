@@ -35,6 +35,7 @@ interface ParteDetalle {
 
 interface AportesLegales {
   presentismo: number;
+  horas_extra: number;
   sueldo_bruto: number;
   aporte_jubilacion: number;
   aporte_ley19032: number;
@@ -61,7 +62,14 @@ interface LiquidacionEmpleado extends Omit<ParteDetalle, "total"> {
   legal: AportesLegales | null;
   total_blanco: number;
   informal: ParteDetalle | null;
-  horas_extra: { horas: number; valor_hora: number | null; monto: number };
+  horas_extra: {
+    horas: number;
+    horas_50: number;
+    horas_100: number;
+    valor_hora: number | null;
+    monto: number;
+    destino: "informal" | "recibo" | "a_definir";
+  };
   escala: { categoria: string; vigente_desde: string; basico: number; no_remunerativo: number; fraccion_jornada: number } | null;
   modo_informal: "adicional" | "complemento";
   informal_pactado: number;
@@ -201,6 +209,7 @@ function DetalleLegal({ legal }: { legal: AportesLegales }) {
   return (
     <>
       {legal.presentismo > 0 && <p>Presentismo: + {formatMoneda(legal.presentismo)}</p>}
+      {legal.horas_extra > 0 && <p>Horas extra en el recibo (con recargo de ley): + {formatMoneda(legal.horas_extra)}</p>}
       <p>Sueldo bruto: {formatMoneda(legal.sueldo_bruto)}</p>
       <p>
         Aportes del empleado: jubilación {formatMoneda(legal.aporte_jubilacion)} · ley 19032{" "}
@@ -553,7 +562,7 @@ function LiquidacionMensual() {
                       </td>
                       <td className="px-4 py-3 font-mono text-[#2C1810] font-semibold" data-label="Total">
                         {formatMoneda(f.total)}
-                        {(f.informal || f.horas_extra.monto > 0) && (
+                        {(f.informal || f.total_informal > 0) && (
                           <div className="text-[10px] font-normal text-[#8B6347] mt-0.5">
                             Blanco {formatMoneda(f.total_blanco)} · Informal {formatMoneda(f.total_informal)}
                           </div>
@@ -590,7 +599,21 @@ function LiquidacionMensual() {
                                 {f.adelantos_informal > 0 && f.adelantos_blanco === 0 && " (descontado de la parte informal)"}
                               </p>
                             )}
-                            {(f.informal || f.horas_extra.monto > 0) && <p className="font-semibold text-[#2C1810]">Blanco</p>}
+                            {(f.informal || f.total_informal > 0) && <p className="font-semibold text-[#2C1810]">Blanco</p>}
+                            {f.horas_extra.destino === "recibo" && f.horas_extra.horas > 0 && (
+                              <p>
+                                Horas extra (en el recibo): {f.horas_extra.horas_50 > 0 && `${formatHoras(f.horas_extra.horas_50)} al 50%`}
+                                {f.horas_extra.horas_50 > 0 && f.horas_extra.horas_100 > 0 && " + "}
+                                {f.horas_extra.horas_100 > 0 && `${formatHoras(f.horas_extra.horas_100)} al 100%`}
+                                {f.horas_extra.valor_hora !== null && ` — valor hora ${formatMoneda(f.horas_extra.valor_hora)}`} = +{" "}
+                                {formatMoneda(f.horas_extra.monto)}
+                              </p>
+                            )}
+                            {f.horas_extra.destino === "a_definir" && f.horas_extra.horas > 0 && (
+                              <p className="text-amber-700">
+                                Horas extra sin pagar (acuerdo a definir): {formatHoras(f.horas_extra.horas)}
+                              </p>
+                            )}
                             {f.escala && (
                               <p className="text-sky-800">
                                 Sueldo según escala: {f.escala.categoria} (vigente desde {f.escala.vigente_desde.slice(5)}/
@@ -601,7 +624,7 @@ function LiquidacionMensual() {
                             )}
                             <DetalleParte p={{ ...f, total: f.total_blanco }} />
                             {f.legal && <DetalleLegal legal={f.legal} />}
-                            {(f.informal || f.horas_extra.monto > 0) && (
+                            {(f.informal || f.total_informal > 0) && (
                               <>
                                 <p className="font-semibold text-[#2C1810] pt-2 border-t border-[#EDE0CC] mt-2">
                                   Informal
@@ -614,7 +637,7 @@ function LiquidacionMensual() {
                                     Total pactado {formatMoneda(f.informal_pactado)} − neto del recibo → se paga en informal lo que falta
                                   </p>
                                 )}
-                                {f.horas_extra.horas > 0 && (
+                                {f.horas_extra.destino === "informal" && f.horas_extra.horas > 0 && (
                                   <p>
                                     Horas extra (por encima del turno pactado): {formatHoras(f.horas_extra.horas)}
                                     {f.horas_extra.valor_hora !== null &&
@@ -699,7 +722,7 @@ function LiquidacionMensual() {
                             className="h-4 w-4 rounded border-[#D4A843] text-[#2C1810] focus:ring-[#D4A843]"
                           />
                           <span className="text-sm text-[#2C1810]">{f.nombre}</span>
-                          {(f.informal || f.horas_extra.monto > 0) && <span className="text-[10px] text-amber-700">+ informal</span>}
+                          {(f.informal || f.total_informal > 0) && <span className="text-[10px] text-amber-700">+ informal</span>}
                         </label>
                       ))
                     )}

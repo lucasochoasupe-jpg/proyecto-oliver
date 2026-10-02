@@ -176,6 +176,10 @@ try { db.exec("ALTER TABLE empleados ADD COLUMN fraccion_jornada REAL NOT NULL D
 // total pactado y se paga solo lo que falta para llegar a él después del
 // neto del recibo.
 try { db.exec("ALTER TABLE empleados ADD COLUMN modo_informal TEXT NOT NULL DEFAULT 'adicional'"); } catch {}
+// Cómo se le pagan las horas extra: 'informal' = en negro a valor hora simple
+// (lo habitual); 'recibo' = en blanco con el recargo de ley (50% / 100%), con
+// aportes; 'a_definir' = no se pagan solas, solo se informan (acuerdo pendiente).
+try { db.exec("ALTER TABLE empleados ADD COLUMN modo_horas_extra TEXT NOT NULL DEFAULT 'informal'"); } catch {}
 try { db.exec("ALTER TABLE settings ADD COLUMN caja_sheet_url TEXT"); } catch {}
 try { db.exec("ALTER TABLE adelantos ADD COLUMN grupo_id INTEGER"); } catch {}
 try { db.exec("ALTER TABLE adelantos ADD COLUMN cuota_numero INTEGER"); } catch {}
@@ -1604,6 +1608,7 @@ export interface Empleado {
   categoria_id: number | null; // categoría de convenio: si está, el sueldo en blanco sale de la escala vigente
   fraccion_jornada: number; // 1 = jornada completa; multiplica el sueldo de escala
   modo_informal: "adicional" | "complemento";
+  modo_horas_extra: "informal" | "recibo" | "a_definir";
 }
 
 function sameWords(a: string[], b: string[]): boolean {
@@ -1730,12 +1735,13 @@ export function updateEmpleado(
     categoria_id?: number | null;
     fraccion_jornada?: number;
     modo_informal?: "adicional" | "complemento";
+    modo_horas_extra?: "informal" | "recibo" | "a_definir";
   }
 ): void {
   const current = db.prepare("SELECT * FROM empleados WHERE id = ?").get(id) as unknown as Empleado | undefined;
   if (!current) return;
   db.prepare(
-    "UPDATE empleados SET nombre = ?, celular = ?, jid = ?, activo = ?, tipo_pago = ?, sueldo_mensual = ?, valor_hora = ?, valor_dia = ?, fecha_ingreso = ?, sueldo_estimado = ?, tipo_pago_informal = ?, sueldo_mensual_informal = ?, valor_hora_informal = ?, valor_dia_informal = ?, cuil = ?, legajo = ?, categoria_laboral = ?, banco = ?, fecha_nacimiento = ?, direccion = ?, email = ?, dni = ?, estado_civil = ?, nacionalidad = ?, contacto_emergencia_nombre = ?, contacto_emergencia_telefono = ?, cbu = ?, convenio_id = ?, jornada_reducida = ?, fecha_alta = ?, categoria_id = ?, fraccion_jornada = ?, modo_informal = ? WHERE id = ?"
+    "UPDATE empleados SET nombre = ?, celular = ?, jid = ?, activo = ?, tipo_pago = ?, sueldo_mensual = ?, valor_hora = ?, valor_dia = ?, fecha_ingreso = ?, sueldo_estimado = ?, tipo_pago_informal = ?, sueldo_mensual_informal = ?, valor_hora_informal = ?, valor_dia_informal = ?, cuil = ?, legajo = ?, categoria_laboral = ?, banco = ?, fecha_nacimiento = ?, direccion = ?, email = ?, dni = ?, estado_civil = ?, nacionalidad = ?, contacto_emergencia_nombre = ?, contacto_emergencia_telefono = ?, cbu = ?, convenio_id = ?, jornada_reducida = ?, fecha_alta = ?, categoria_id = ?, fraccion_jornada = ?, modo_informal = ?, modo_horas_extra = ? WHERE id = ?"
   ).run(
     patch.nombre ?? current.nombre,
     patch.celular !== undefined ? patch.celular : current.celular,
@@ -1770,6 +1776,7 @@ export function updateEmpleado(
     patch.categoria_id !== undefined ? patch.categoria_id : current.categoria_id,
     patch.fraccion_jornada !== undefined ? patch.fraccion_jornada : current.fraccion_jornada,
     patch.modo_informal !== undefined ? patch.modo_informal : current.modo_informal,
+    patch.modo_horas_extra !== undefined ? patch.modo_horas_extra : current.modo_horas_extra,
     id
   );
 
@@ -3170,6 +3177,7 @@ function sinBruto({ bruto: _bruto, ...resto }: ParteLiquidacion): Omit<ParteLiqu
 // empleado.
 export interface AportesLegales {
   presentismo: number;
+  horas_extra: number; // monto de horas extra que van en el recibo (modo 'recibo'), ya incluido en sueldo_bruto
   sueldo_bruto: number; // bruto de la parte blanca + presentismo ganado
   aporte_jubilacion: number;
   aporte_ley19032: number;
@@ -3210,7 +3218,7 @@ function configAportesEmpleado(
   };
 }
 
-function calcularAportesLegales(parte: ParteLiquidacion, config: ConfigAportesEmpleado): AportesLegales {
+function calcularAportesLegales(parte: ParteLiquidacion, config: ConfigAportesEmpleado, horasExtraRecibo = 0): AportesLegales {
   // Presentismo: solo tiene sentido para "mensual" — "hora" ya paga
   // estrictamente lo trabajado (no hay noción de ausencia que perdonar o
   // castigar aparte) y "día" ya refleja la falta al no pagar jornal ese día.
@@ -3218,7 +3226,9 @@ function calcularAportesLegales(parte: ParteLiquidacion, config: ConfigAportesEm
   // tardanza en el período.
   const presentismoAplica = parte.tipo_pago === "mensual" && parte.minutos_perdidos === 0 && parte.dias_ausencia === 0;
   const presentismo = presentismoAplica ? parte.bruto * (config.presentismo_pct / 100) : 0;
-  const sueldoBruto = parte.bruto + presentismo;
+  // Las horas extra que van en el recibo son remunerativas (llevan aportes)
+  // pero no son base del presentismo.
+  const sueldoBruto = parte.bruto + presentismo + horasExtraRecibo;
 
   const aporteJubilacion = sueldoBruto * (config.aporte_jubilacion_pct / 100);
   const aporteLey19032 = sueldoBruto * (config.aporte_ley19032_pct / 100);
@@ -3238,6 +3248,7 @@ function calcularAportesLegales(parte: ParteLiquidacion, config: ConfigAportesEm
 
   return {
     presentismo,
+    horas_extra: horasExtraRecibo,
     sueldo_bruto: sueldoBruto,
     aporte_jubilacion: aporteJubilacion,
     aporte_ley19032: aporteLey19032,
@@ -3289,7 +3300,7 @@ export interface LiquidacionEmpleado {
   adelantos_blanco: number; // parte de `adelantos` que no entró en la informal (o todo, si no tiene) y se descontó de la blanca
   adelantos_informal: number; // parte de `adelantos` descontada de la informal (prioridad, hasta agotarla)
   informal: ParteLiquidacionInformal | null; // parte "informal", independiente, null si el empleado no tiene
-  horas_extra: HorasExtra; // se pagan en negro, sumadas a lo informal (aunque no tenga parte informal)
+  horas_extra: HorasExtra; // según modo_horas_extra: en negro (sumadas a lo informal), en el recibo (dentro de legal) o a definir (no se pagan)
   escala: { categoria: string; vigente_desde: string; basico: number; no_remunerativo: number; fraccion_jornada: number } | null; // de dónde salió el sueldo en blanco
   modo_informal: "adicional" | "complemento";
   informal_pactado: number; // bruto de la parte informal; en modo 'complemento' es el total pactado, no lo que se paga
@@ -3380,34 +3391,71 @@ function horasPactadasEnFecha(ctx: Pick<ParteContexto, "horariosEmp" | "puntuale
 // no hay contra qué comparar.
 export interface HorasExtra {
   horas: number;
-  valor_hora: number | null; // valor_hora blanco + informal; si no hay ninguno, el equivalente mensual
+  horas_50: number; // modo 'recibo': días hábiles (recargo 50%)
+  horas_100: number; // modo 'recibo': sábados después de las 13, domingos y feriados (recargo 100%)
+  valor_hora: number | null; // informal: valor_hora blanco + informal (o el equivalente mensual); recibo: valor hora de la parte blanca
   monto: number;
+  destino: "informal" | "recibo" | "a_definir";
 }
 
 function calcularHorasExtra(
-  emp: Pick<Empleado, "tipo_pago" | "tipo_pago_informal" | "valor_hora" | "valor_hora_informal">,
+  emp: Pick<Empleado, "tipo_pago" | "tipo_pago_informal" | "valor_hora" | "valor_hora_informal" | "modo_horas_extra">,
+  tipoBlanco: ParteLiquidacion["tipo_pago"], // el que se liquida de verdad (con escala es "mensual" aunque la ficha diga otra cosa)
   ctx: ParteContexto,
   valorHoraEquivalente: number | null,
+  valorHoraBlanco: number | null,
+  feriados: Set<string>,
   advertencias: string[]
 ): HorasExtra {
-  const tipo = emp.tipo_pago ?? emp.tipo_pago_informal;
-  if ((tipo !== "mensual" && tipo !== "dia") || (ctx.horariosEmp.length === 0 && ctx.puntualesEmp.length === 0)) {
-    return { horas: 0, valor_hora: null, monto: 0 };
+  const destino = emp.modo_horas_extra;
+  const vacio: HorasExtra = { horas: 0, horas_50: 0, horas_100: 0, valor_hora: null, monto: 0, destino };
+  const tipo = tipoBlanco ?? emp.tipo_pago_informal;
+  if ((tipo !== "mensual" && tipo !== "dia") || (ctx.horariosEmp.length === 0 && ctx.puntualesEmp.length === 0)) return vacio;
+
+  // Última salida fichada de cada día — para saber si un sábado se trabajó
+  // después de las 13 (recargo 100% en modo 'recibo').
+  const ultimaSalidaMin = new Map<string, number>();
+  for (const t of ctx.turnosEmp) {
+    if (t.salida_at === null) continue;
+    const fecha = fechaAR(t.entrada_at);
+    ultimaSalidaMin.set(fecha, Math.max(ultimaSalidaMin.get(fecha) ?? 0, minutosDelDia(t.salida_at)));
   }
-  let horas = 0;
+
+  let horas50 = 0;
+  let horas100 = 0;
   for (const [fecha, horasDia] of horasTrabajadasPorFecha(ctx.turnosEmp)) {
     // Se pagan por medias horas completas, día por día: menos de 30 min no
     // cuenta, y lo que sobre de la última media hora se descarta.
-    const extraDia = Math.max(0, horasDia - horasPactadasEnFecha(ctx, fecha));
-    horas += Math.floor(extraDia * 2 + 1e-9) / 2;
+    const extraDia = Math.floor(Math.max(0, horasDia - horasPactadasEnFecha(ctx, fecha)) * 2 + 1e-9) / 2;
+    if (extraDia === 0) continue;
+    const diaSemana = new Date(`${fecha}T00:00:00Z`).getUTCDay();
+    const al100 = diaSemana === 0 || feriados.has(fecha) || (diaSemana === 6 && (ultimaSalidaMin.get(fecha) ?? 0) > 13 * 60);
+    if (al100) horas100 += extraDia;
+    else horas50 += extraDia;
   }
+  const horas = horas50 + horas100;
+  if (horas === 0) return vacio;
+
+  if (destino === "a_definir") {
+    advertencias.push(`Hizo ${horas} h extra pero su acuerdo de horas extra está sin definir — no se pagan`);
+    return { ...vacio, horas, horas_50: horas50, horas_100: horas100 };
+  }
+
+  if (destino === "recibo") {
+    // Legal (LCT art. 201): valor hora de la parte blanca con recargo del 50%
+    // en días hábiles y del 100% sábados después de las 13, domingos y feriados.
+    if (!valorHoraBlanco) advertencias.push("Tiene horas extra en el recibo pero no hay valor hora en blanco para pagarlas");
+    const v = valorHoraBlanco ?? 0;
+    return { horas, horas_50: horas50, horas_100: horas100, valor_hora: valorHoraBlanco, monto: horas50 * v * 1.5 + horas100 * v * 2, destino };
+  }
+
   // Solo suma el valor hora de las partes que el empleado tiene configuradas
   // (puede quedar un valor_hora_informal viejo en la ficha sin parte informal).
   const valorHoraFicha =
     (emp.tipo_pago !== null ? emp.valor_hora ?? 0 : 0) + (emp.tipo_pago_informal !== null ? emp.valor_hora_informal ?? 0 : 0);
   const valorHora = valorHoraFicha > 0 ? valorHoraFicha : valorHoraEquivalente;
-  if (horas > 0 && !valorHora) advertencias.push("Tiene horas extra pero no hay valor hora para pagarlas");
-  return { horas, valor_hora: valorHora, monto: horas * (valorHora ?? 0) };
+  if (!valorHora) advertencias.push("Tiene horas extra pero no hay valor hora para pagarlas");
+  return { horas, horas_50: 0, horas_100: 0, valor_hora: valorHora, monto: horas * (valorHora ?? 0), destino };
 }
 
 // Calcula el desglose de UNA parte del sueldo (blanca o informal) con su propio
@@ -3651,6 +3699,7 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
   const configLegal = getConfiguracionLiquidacion();
   const convenios = new Map(listConvenios().map((c) => [c.id, c]));
   const categoriasPorId = new Map(listCategoriasConvenio().map((c) => [c.id, c.nombre]));
+  const feriadosDelPeriodo = new Set(listFeriados(filters).map((f) => f.fecha));
   const turnos = calcularHorasTrabajadas(filters);
   const cumplimiento = calcularCumplimiento(filters);
   const ausencias = calcularAusencias(filters);
@@ -3726,11 +3775,18 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
     // Aportes/contribuciones legales (jubilación, ley 19032, obra social,
     // sindical, presentismo, costo empleador) solo aplican a la parte blanca
     // — la informal no está registrada, no tiene aportes.
-    const legal = parteBlanco.tipo_pago !== null ? calcularAportesLegales(parteBlanco, configAportesEmpleado(configLegal, emp, convenios)) : null;
-
     const valorHoraEquivalente =
       [parteBlanco, parteInformal].reduce((acc, p) => acc + (p?.tipo_pago === "mensual" ? p.valor_hora_equivalente ?? 0 : 0), 0) || null;
-    const horasExtra = calcularHorasExtra(emp, ctx, valorHoraEquivalente, advertencias);
+    const valorHoraBlanco =
+      parteBlanco.tipo_pago === "mensual" ? parteBlanco.valor_hora_equivalente : parteBlanco.tipo_pago !== null ? parteBlanco.valor_hora : null;
+    const horasExtra = calcularHorasExtra(emp, parteBlanco.tipo_pago, ctx, valorHoraEquivalente, valorHoraBlanco, feriadosDelPeriodo, advertencias);
+    const extrasEnRecibo = horasExtra.destino === "recibo" ? horasExtra.monto : 0;
+    const extrasEnInformal = horasExtra.destino === "informal" ? horasExtra.monto : 0;
+
+    const legal =
+      parteBlanco.tipo_pago !== null
+        ? calcularAportesLegales(parteBlanco, configAportesEmpleado(configLegal, emp, convenios), extrasEnRecibo)
+        : null;
     const netoBlanco = legal ? legal.sueldo_bruto - legal.total_aportes_empleado : parteBlanco.bruto;
 
     // Los adelantos son un solo pozo (no hay "adelanto blanco/informal" al
@@ -3740,7 +3796,7 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
     // se paga lo que falta después del neto del recibo (nunca negativo).
     const informalPactado = parteInformal?.bruto ?? 0;
     const informalAPagar = emp.modo_informal === "complemento" ? Math.max(0, informalPactado - netoBlanco) : informalPactado;
-    const brutoInformal = informalAPagar + horasExtra.monto;
+    const brutoInformal = informalAPagar + extrasEnInformal;
     const adelantosSobreInformal = Math.min(adelantos, brutoInformal);
     const adelantosSobreBlanco = adelantos - adelantosSobreInformal;
     const totalInformal = brutoInformal - adelantosSobreInformal;

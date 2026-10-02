@@ -279,6 +279,7 @@ export function generarReciboPdf(data: ReciboData): Promise<Buffer> {
       data.tipo_pago === "mensual" ? "Sueldo Mensual" : data.tipo_pago === "hora" ? "Valor Hora" : "Jornal";
     const filasConceptos: string[][] = [[labelBase, formatARS(data.sueldo_o_jornal)]];
     if (data.legal.presentismo > 0) filasConceptos.push(["Presentismo", formatARS(data.legal.presentismo)]);
+    if (data.legal.horas_extra > 0) filasConceptos.push(["Horas Extra", formatARS(data.legal.horas_extra)]);
     filasConceptos.push(["Jubilación", `- ${formatARS(data.legal.aporte_jubilacion)}`]);
     filasConceptos.push(["Ley 19032 (INSSJP)", `- ${formatARS(data.legal.aporte_ley19032)}`]);
     filasConceptos.push([

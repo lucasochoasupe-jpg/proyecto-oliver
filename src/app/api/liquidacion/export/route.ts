@@ -52,7 +52,8 @@ export async function GET(req: NextRequest) {
     { header: "Total blanco", key: "total_blanco", width: 16 },
     { header: "Tipo de pago (informal)", key: "tipo_pago_informal", width: 16 },
     { header: "Base (informal)", key: "base_informal", width: 14 },
-    { header: "Horas extra (en negro)", key: "horas_extra", width: 18 },
+    { header: "Horas extra", key: "horas_extra", width: 14 },
+    { header: "Horas extra se pagan", key: "destino_horas_extra", width: 20 },
     { header: "Monto horas extra", key: "monto_horas_extra", width: 18 },
     { header: "Total informal", key: "total_informal", width: 16 },
     { header: "Total", key: "total", width: 16 },
@@ -86,6 +87,14 @@ export async function GET(req: NextRequest) {
       monto_ausencia_justificada: f.tipo_pago === "dia" ? Number(f.monto_ausencia_justificada.toFixed(2)) : "",
       dias_trabajados: f.dias_trabajados ?? "",
       horas_extra: f.horas_extra.horas > 0 ? Number(f.horas_extra.horas.toFixed(2)) : "",
+      destino_horas_extra:
+        f.horas_extra.horas > 0
+          ? f.horas_extra.destino === "recibo"
+            ? "En el recibo"
+            : f.horas_extra.destino === "a_definir"
+            ? "A definir (sin pagar)"
+            : "En negro"
+          : "",
       monto_horas_extra: f.horas_extra.monto > 0 ? Number(f.horas_extra.monto.toFixed(2)) : "",
       total_por_horas: f.total_por_horas !== null ? Number(f.total_por_horas.toFixed(2)) : "",
       adelantos: f.adelantos > 0 ? Number(f.adelantos.toFixed(2)) : "",
@@ -114,7 +123,7 @@ export async function GET(req: NextRequest) {
           ? f.informal.valor_hora ?? ""
           : f.informal.valor_dia ?? ""
         : "",
-      total_informal: f.informal || f.horas_extra.monto > 0 ? Number(f.total_informal.toFixed(2)) : "",
+      total_informal: f.informal || f.total_informal > 0 ? Number(f.total_informal.toFixed(2)) : "",
       total: Number(f.total.toFixed(2)),
       advertencias: f.advertencias.join(" · "),
     });
