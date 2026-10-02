@@ -61,6 +61,9 @@ interface LiquidacionEmpleado extends Omit<ParteDetalle, "total"> {
   total_blanco: number;
   informal: ParteDetalle | null;
   horas_extra: { horas: number; valor_hora: number | null; monto: number };
+  escala: { categoria: string; vigente_desde: string; basico: number; no_remunerativo: number; fraccion_jornada: number } | null;
+  modo_informal: "adicional" | "complemento";
+  informal_pactado: number;
   total_informal: number;
   total: number;
   advertencias: string[];
@@ -586,6 +589,14 @@ function LiquidacionMensual() {
                               </p>
                             )}
                             {(f.informal || f.horas_extra.monto > 0) && <p className="font-semibold text-[#2C1810]">Blanco</p>}
+                            {f.escala && (
+                              <p className="text-sky-800">
+                                Sueldo según escala: {f.escala.categoria} (vigente desde {f.escala.vigente_desde.slice(5)}/
+                                {f.escala.vigente_desde.slice(0, 4)}) {formatMoneda(f.escala.basico)}
+                                {f.escala.fraccion_jornada !== 1 &&
+                                  ` × ${Math.round(f.escala.fraccion_jornada * 10000) / 100}% de jornada = ${formatMoneda(f.escala.basico * f.escala.fraccion_jornada)}`}
+                              </p>
+                            )}
                             <DetalleParte p={{ ...f, total: f.total_blanco }} />
                             {f.legal && <DetalleLegal legal={f.legal} />}
                             {(f.informal || f.horas_extra.monto > 0) && (
@@ -596,6 +607,11 @@ function LiquidacionMensual() {
                                     ` — ${f.informal.tipo_pago === "mensual" ? "Mensual" : f.informal.tipo_pago === "hora" ? "Por hora" : "Por día"}`}
                                 </p>
                                 {f.informal && <DetalleParte p={f.informal} />}
+                                {f.informal && f.modo_informal === "complemento" && (
+                                  <p className="text-sky-800">
+                                    Total pactado {formatMoneda(f.informal_pactado)} − neto del recibo → se paga en informal lo que falta
+                                  </p>
+                                )}
                                 {f.horas_extra.horas > 0 && (
                                   <p>
                                     Horas extra (por encima del turno pactado): {formatHoras(f.horas_extra.horas)}

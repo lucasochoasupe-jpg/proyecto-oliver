@@ -74,6 +74,95 @@ try { db.exec("ALTER TABLE empleados ADD COLUMN jornada_reducida INTEGER NOT NUL
 // a fecha_ingreso (cuando empezó a trabajar), que sigue siendo la base de
 // vacaciones y aguinaldo; el recibo muestra la de alta.
 try { db.exec("ALTER TABLE empleados ADD COLUMN fecha_alta TEXT"); } catch {}
+
+// Escalas salariales por categoría de convenio, con mes de vigencia: el sueldo
+// en blanco de un empleado con categoría asignada sale de la escala vigente en
+// el mes liquidado × su fracción de jornada (ver sueldoSegunEscala). Cargar una
+// paritaria nueva = agregar filas con un vigente_desde nuevo; los meses
+// anteriores se siguen calculando con sus valores. Se precargan una sola vez
+// (al crear la tabla) con las escalas oficiales publicadas por AIPAR: CCT
+// 615/10 ago–dic 2026 y CCT 145/90 jun–sep 2026 (jornada de 7 h y de 8 h).
+{
+  const existia = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'escalas'").get();
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS categorias_convenio (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      convenio_id INTEGER NOT NULL REFERENCES convenios(id),
+      nombre TEXT NOT NULL,
+      orden INTEGER NOT NULL DEFAULT 0,
+      UNIQUE (convenio_id, nombre)
+    );
+    CREATE TABLE IF NOT EXISTS escalas (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      categoria_id INTEGER NOT NULL REFERENCES categorias_convenio(id),
+      vigente_desde TEXT NOT NULL, -- YYYY-MM
+      basico REAL NOT NULL,
+      no_remunerativo REAL NOT NULL DEFAULT 0,
+      UNIQUE (categoria_id, vigente_desde)
+    );
+  `);
+  if (!existia) {
+    const seed: Record<string, [string, [string, number, number][]][]> = {
+      "615/10": [
+        ["Maestro", [["2026-08", 1642966, 41074], ["2026-09", 1684040, 33681], ["2026-10", 1717721, 34354], ["2026-11", 1752075, 43802], ["2026-12", 1795877, 0]]],
+        ["Oficial", [["2026-08", 1538255, 38456], ["2026-09", 1576711, 31534], ["2026-10", 1608245, 32165], ["2026-11", 1640410, 41010], ["2026-12", 1681420, 0]]],
+        ["Medio Oficial", [["2026-08", 1487859, 37196], ["2026-09", 1525055, 30501], ["2026-10", 1555556, 31111], ["2026-11", 1586667, 39667], ["2026-12", 1626334, 0]]],
+        ["Peón", [["2026-08", 1473452, 36836], ["2026-09", 1510288, 30206], ["2026-10", 1540494, 30810], ["2026-11", 1571304, 39283], ["2026-12", 1610587, 0]]],
+        ["Vendedor/a", [["2026-08", 1538255, 38456], ["2026-09", 1576711, 31534], ["2026-10", 1608245, 32165], ["2026-11", 1640410, 41010], ["2026-12", 1681420, 0]]],
+        ["Cajero/a", [["2026-08", 1538255, 38456], ["2026-09", 1576711, 31534], ["2026-10", 1608245, 32165], ["2026-11", 1640410, 41010], ["2026-12", 1681420, 0]]],
+        ["Empaquetador/a", [["2026-08", 1487859, 37196], ["2026-09", 1525055, 30501], ["2026-10", 1555556, 31111], ["2026-11", 1586667, 39667], ["2026-12", 1626334, 0]]],
+        ["Repartidor", [["2026-08", 1501258, 37531], ["2026-09", 1538789, 30776], ["2026-10", 1569565, 31391], ["2026-11", 1600956, 40024], ["2026-12", 1640980, 0]]],
+        ["Repartidor c/ cobranza", [["2026-08", 1614553, 40364], ["2026-09", 1654917, 33098], ["2026-10", 1688015, 33760], ["2026-11", 1721775, 43044], ["2026-12", 1764819, 0]]],
+        ["Personal Administrativo", [["2026-08", 1852696, 46317], ["2026-09", 1899013, 37980], ["2026-10", 1936993, 38740], ["2026-11", 1975733, 49393], ["2026-12", 2025126, 0]]],
+        ["Sandwich/Inglés: Amasador", [["2026-08", 1902305, 47558], ["2026-09", 1949863, 38997], ["2026-10", 1988860, 39777], ["2026-11", 2028637, 50716], ["2026-12", 2079353, 0]]],
+        ["Sandwich/Inglés: Maestro", [["2026-08", 1902305, 47558], ["2026-09", 1949863, 38997], ["2026-10", 1988860, 39777], ["2026-11", 2028637, 50716], ["2026-12", 2079353, 0]]],
+        ["Sandwich/Inglés: Oficial", [["2026-08", 1734009, 43350], ["2026-09", 1777359, 35547], ["2026-10", 1812906, 36258], ["2026-11", 1849164, 46229], ["2026-12", 1895393, 0]]],
+        ["Sandwich/Inglés: Medio Oficial", [["2026-08", 1688491, 42212], ["2026-09", 1730703, 34614], ["2026-10", 1765317, 35306], ["2026-11", 1800623, 45016], ["2026-12", 1845639, 0]]],
+        ["Sandwich/Inglés: Cortador", [["2026-08", 1734009, 43350], ["2026-09", 1777359, 35547], ["2026-10", 1812906, 36258], ["2026-11", 1849164, 46229], ["2026-12", 1895393, 0]]],
+        ["Sandwich/Inglés: Repartidor", [["2026-08", 1766936, 44173], ["2026-09", 1811109, 36222], ["2026-10", 1847331, 36947], ["2026-11", 1884278, 47107], ["2026-12", 1931385, 0]]],
+        ["Sandwich/Inglés: Repartidor c/ cobranza", [["2026-08", 1824973, 45624], ["2026-09", 1870597, 37412], ["2026-10", 1908009, 38160], ["2026-11", 1946169, 48654], ["2026-12", 1994823, 0]]],
+        ["Sandwich/Inglés: Mantenimiento", [["2026-08", 1841666, 46042], ["2026-09", 1887708, 37754], ["2026-10", 1925462, 38509], ["2026-11", 1963971, 49099], ["2026-12", 2013070, 0]]],
+        ["Sandwich/Inglés: Encargado de expedición", [["2026-08", 1765821, 44146], ["2026-09", 1809967, 36199], ["2026-10", 1846166, 36923], ["2026-11", 1883089, 47077], ["2026-12", 1930166, 0]]],
+        ["Sandwich/Inglés: Administrativo", [["2026-08", 1841666, 46042], ["2026-09", 1887708, 37754], ["2026-10", 1925462, 38509], ["2026-11", 1963971, 49099], ["2026-12", 2013070, 0]]],
+        ["Sandwich/Inglés: Control de calidad", [["2026-08", 1841666, 46042], ["2026-09", 1887708, 37754], ["2026-10", 1925462, 38509], ["2026-11", 1963971, 49099], ["2026-12", 2013070, 0]]],
+        ["Sandwich/Inglés: Peón de patio", [["2026-08", 1597474, 39937], ["2026-09", 1637411, 32748], ["2026-10", 1670159, 33403], ["2026-11", 1703562, 42589], ["2026-12", 1746151, 0]]],
+        ["Medialunero: Maestro", [["2026-08", 1734009, 43350], ["2026-09", 1777359, 35547], ["2026-10", 1812906, 36258], ["2026-11", 1849164, 46229], ["2026-12", 1895393, 0]]],
+        ["Medialunero: Ayudante", [["2026-08", 1662493, 41562], ["2026-09", 1704055, 34081], ["2026-10", 1738136, 34763], ["2026-11", 1772899, 44322], ["2026-12", 1817221, 0]]],
+      ],
+      "145/90": [
+        ["Maestro (7 h)", [["2026-06", 1726828, 0], ["2026-07", 1761365, 0], ["2026-08", 1794831, 0], ["2026-09", 1828932, 0]]],
+        ["Oficial (7 h)", [["2026-06", 1476778, 0], ["2026-07", 1506314, 0], ["2026-08", 1534933, 0], ["2026-09", 1564097, 0]]],
+        ["1/2 Oficial (7 h)", [["2026-06", 1335279, 0], ["2026-07", 1361984, 0], ["2026-08", 1387862, 0], ["2026-09", 1414232, 0]]],
+        ["Ayudante (7 h)", [["2026-06", 1318618, 0], ["2026-07", 1344991, 0], ["2026-08", 1370546, 0], ["2026-09", 1396586, 0]]],
+        ["Maestro (8 h)", [["2026-07", 2078410, 0], ["2026-08", 2117900, 0], ["2026-09", 2158140, 0]]],
+        ["Oficial (8 h)", [["2026-07", 1777450, 0], ["2026-08", 1811222, 0], ["2026-09", 1845635, 0]]],
+        ["1/2 Oficial (8 h)", [["2026-07", 1607142, 0], ["2026-08", 1637677, 0], ["2026-09", 1668793, 0]]],
+        ["Ayudante (8 h)", [["2026-07", 1587089, 0], ["2026-08", 1617244, 0], ["2026-09", 1647971, 0]]],
+      ],
+    };
+    const insCat = db.prepare("INSERT OR IGNORE INTO categorias_convenio (convenio_id, nombre, orden) VALUES (?, ?, ?)");
+    const getCat = db.prepare("SELECT id FROM categorias_convenio WHERE convenio_id = ? AND nombre = ?");
+    const insEsc = db.prepare("INSERT OR IGNORE INTO escalas (categoria_id, vigente_desde, basico, no_remunerativo) VALUES (?, ?, ?, ?)");
+    for (const [codigo, categorias] of Object.entries(seed)) {
+      const conv = db.prepare("SELECT id FROM convenios WHERE codigo = ?").get(codigo) as { id: number } | undefined;
+      if (!conv) continue;
+      categorias.forEach(([nombre, valores], orden) => {
+        insCat.run(conv.id, nombre, orden);
+        const cat = getCat.get(conv.id, nombre) as { id: number };
+        for (const [mes, basico, nr] of valores) insEsc.run(cat.id, mes, basico, nr);
+      });
+    }
+  }
+}
+try { db.exec("ALTER TABLE empleados ADD COLUMN categoria_id INTEGER REFERENCES categorias_convenio(id)"); } catch {}
+// Fracción de la jornada completa del convenio que cumple (1 = completa, 0.5 =
+// media jornada): el sueldo de escala se multiplica por esto.
+try { db.exec("ALTER TABLE empleados ADD COLUMN fraccion_jornada REAL NOT NULL DEFAULT 1"); } catch {}
+// Cómo se combina la parte informal con el recibo: 'adicional' = se suma
+// aparte (comportamiento original); 'complemento' = la parte informal es el
+// total pactado y se paga solo lo que falta para llegar a él después del
+// neto del recibo.
+try { db.exec("ALTER TABLE empleados ADD COLUMN modo_informal TEXT NOT NULL DEFAULT 'adicional'"); } catch {}
 try { db.exec("ALTER TABLE settings ADD COLUMN caja_sheet_url TEXT"); } catch {}
 try { db.exec("ALTER TABLE adelantos ADD COLUMN grupo_id INTEGER"); } catch {}
 try { db.exec("ALTER TABLE adelantos ADD COLUMN cuota_numero INTEGER"); } catch {}
@@ -1499,6 +1588,9 @@ export interface Empleado {
   convenio_id: number | null;
   jornada_reducida: number; // 0/1
   fecha_alta: string | null; // ISO — alta registrada, la que va en el recibo (si es null, se usa fecha_ingreso)
+  categoria_id: number | null; // categoría de convenio: si está, el sueldo en blanco sale de la escala vigente
+  fraccion_jornada: number; // 1 = jornada completa; multiplica el sueldo de escala
+  modo_informal: "adicional" | "complemento";
 }
 
 function sameWords(a: string[], b: string[]): boolean {
@@ -1622,12 +1714,15 @@ export function updateEmpleado(
     convenio_id?: number | null;
     jornada_reducida?: number;
     fecha_alta?: string | null;
+    categoria_id?: number | null;
+    fraccion_jornada?: number;
+    modo_informal?: "adicional" | "complemento";
   }
 ): void {
   const current = db.prepare("SELECT * FROM empleados WHERE id = ?").get(id) as unknown as Empleado | undefined;
   if (!current) return;
   db.prepare(
-    "UPDATE empleados SET nombre = ?, celular = ?, jid = ?, activo = ?, tipo_pago = ?, sueldo_mensual = ?, valor_hora = ?, valor_dia = ?, fecha_ingreso = ?, sueldo_estimado = ?, tipo_pago_informal = ?, sueldo_mensual_informal = ?, valor_hora_informal = ?, valor_dia_informal = ?, cuil = ?, legajo = ?, categoria_laboral = ?, banco = ?, fecha_nacimiento = ?, direccion = ?, email = ?, dni = ?, estado_civil = ?, nacionalidad = ?, contacto_emergencia_nombre = ?, contacto_emergencia_telefono = ?, cbu = ?, convenio_id = ?, jornada_reducida = ?, fecha_alta = ? WHERE id = ?"
+    "UPDATE empleados SET nombre = ?, celular = ?, jid = ?, activo = ?, tipo_pago = ?, sueldo_mensual = ?, valor_hora = ?, valor_dia = ?, fecha_ingreso = ?, sueldo_estimado = ?, tipo_pago_informal = ?, sueldo_mensual_informal = ?, valor_hora_informal = ?, valor_dia_informal = ?, cuil = ?, legajo = ?, categoria_laboral = ?, banco = ?, fecha_nacimiento = ?, direccion = ?, email = ?, dni = ?, estado_civil = ?, nacionalidad = ?, contacto_emergencia_nombre = ?, contacto_emergencia_telefono = ?, cbu = ?, convenio_id = ?, jornada_reducida = ?, fecha_alta = ?, categoria_id = ?, fraccion_jornada = ?, modo_informal = ? WHERE id = ?"
   ).run(
     patch.nombre ?? current.nombre,
     patch.celular !== undefined ? patch.celular : current.celular,
@@ -1659,6 +1754,9 @@ export function updateEmpleado(
     patch.convenio_id !== undefined ? patch.convenio_id : current.convenio_id,
     patch.jornada_reducida !== undefined ? patch.jornada_reducida : current.jornada_reducida,
     patch.fecha_alta !== undefined ? patch.fecha_alta : current.fecha_alta,
+    patch.categoria_id !== undefined ? patch.categoria_id : current.categoria_id,
+    patch.fraccion_jornada !== undefined ? patch.fraccion_jornada : current.fraccion_jornada,
+    patch.modo_informal !== undefined ? patch.modo_informal : current.modo_informal,
     id
   );
 
@@ -2493,6 +2591,81 @@ export function updateConvenio(id: number, patch: Partial<Omit<Convenio, "id" | 
   ).run(next.nombre, next.presentismo_pct, next.aporte_sindical_pct, next.aporte_sepelio_pct, next.aporte_colonia_pct, id);
 }
 
+// ── Escalas salariales ──────────────────────────────────────────────────
+
+export interface CategoriaConvenio {
+  id: number;
+  convenio_id: number;
+  nombre: string;
+  orden: number;
+}
+
+export interface Escala {
+  categoria_id: number;
+  vigente_desde: string; // YYYY-MM
+  basico: number;
+  no_remunerativo: number;
+}
+
+export function listCategoriasConvenio(convenioId?: number): CategoriaConvenio[] {
+  return (
+    convenioId !== undefined
+      ? db.prepare("SELECT * FROM categorias_convenio WHERE convenio_id = ? ORDER BY orden, nombre").all(convenioId)
+      : db.prepare("SELECT * FROM categorias_convenio ORDER BY convenio_id, orden, nombre").all()
+  ) as unknown as CategoriaConvenio[];
+}
+
+export function crearCategoriaConvenio(convenioId: number, nombre: string): number {
+  const orden = (db.prepare("SELECT COALESCE(MAX(orden), -1) + 1 AS o FROM categorias_convenio WHERE convenio_id = ?").get(convenioId) as { o: number }).o;
+  const info = db.prepare("INSERT INTO categorias_convenio (convenio_id, nombre, orden) VALUES (?, ?, ?)").run(convenioId, nombre, orden);
+  return Number(info.lastInsertRowid);
+}
+
+// Todas las escalas de un convenio (todas las vigencias), de la más nueva a la más vieja.
+export function listEscalas(convenioId: number): Escala[] {
+  return db
+    .prepare(
+      `SELECT e.categoria_id, e.vigente_desde, e.basico, e.no_remunerativo
+       FROM escalas e JOIN categorias_convenio c ON c.id = e.categoria_id
+       WHERE c.convenio_id = ? ORDER BY e.vigente_desde DESC, c.orden`
+    )
+    .all(convenioId) as unknown as Escala[];
+}
+
+// Escala vigente de una categoría en un mes (YYYY-MM): la de vigente_desde más
+// reciente que no sea posterior a ese mes. null si no hay ninguna todavía.
+export function escalaVigente(categoriaId: number, mes: string): Escala | null {
+  return (
+    (db
+      .prepare(
+        "SELECT categoria_id, vigente_desde, basico, no_remunerativo FROM escalas WHERE categoria_id = ? AND vigente_desde <= ? ORDER BY vigente_desde DESC LIMIT 1"
+      )
+      .get(categoriaId, mes) as unknown as Escala | undefined) ?? null
+  );
+}
+
+// Carga (o corrige) los valores de una vigencia para varias categorías a la vez.
+export function guardarEscalas(vigenteDesde: string, filas: { categoria_id: number; basico: number; no_remunerativo: number }[]): void {
+  const stmt = db.prepare(
+    `INSERT INTO escalas (categoria_id, vigente_desde, basico, no_remunerativo) VALUES (?, ?, ?, ?)
+     ON CONFLICT(categoria_id, vigente_desde) DO UPDATE SET basico = excluded.basico, no_remunerativo = excluded.no_remunerativo`
+  );
+  db.exec("BEGIN");
+  try {
+    for (const f of filas) stmt.run(f.categoria_id, vigenteDesde, f.basico, f.no_remunerativo);
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
+}
+
+export function borrarVigenciaEscala(convenioId: number, vigenteDesde: string): void {
+  db.prepare(
+    "DELETE FROM escalas WHERE vigente_desde = ? AND categoria_id IN (SELECT id FROM categorias_convenio WHERE convenio_id = ?)"
+  ).run(vigenteDesde, convenioId);
+}
+
 // ── Feriados ─────────────────────────────────────────────────────────────
 
 export interface Feriado {
@@ -3054,6 +3227,9 @@ export interface LiquidacionEmpleado {
   adelantos_informal: number; // parte de `adelantos` descontada de la informal (prioridad, hasta agotarla)
   informal: ParteLiquidacionInformal | null; // parte "informal", independiente, null si el empleado no tiene
   horas_extra: HorasExtra; // se pagan en negro, sumadas a lo informal (aunque no tenga parte informal)
+  escala: { categoria: string; vigente_desde: string; basico: number; no_remunerativo: number; fraccion_jornada: number } | null; // de dónde salió el sueldo en blanco
+  modo_informal: "adicional" | "complemento";
+  informal_pactado: number; // bruto de la parte informal; en modo 'complemento' es el total pactado, no lo que se paga
   total_informal: number; // informal.total + horas_extra.monto - adelantos_informal
   total: number; // total_blanco + total_informal
   advertencias: string[];
@@ -3411,6 +3587,7 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
   );
   const configLegal = getConfiguracionLiquidacion();
   const convenios = new Map(listConvenios().map((c) => [c.id, c]));
+  const categoriasPorId = new Map(listCategoriasConvenio().map((c) => [c.id, c.nombre]));
   const turnos = calcularHorasTrabajadas(filters);
   const cumplimiento = calcularCumplimiento(filters);
   const ausencias = calcularAusencias(filters);
@@ -3457,8 +3634,15 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
       ocurrencias,
     };
 
+    // Con categoría de convenio asignada, la parte blanca es mensual y el
+    // sueldo sale de la escala vigente en el mes liquidado × fracción de
+    // jornada; si todavía no hay escala para ese mes, se usa lo cargado a mano.
+    const escala = emp.categoria_id !== null ? escalaVigente(emp.categoria_id, filters.desde.slice(0, 7)) : null;
+    if (emp.categoria_id !== null && !escala) advertencias.push("Su categoría no tiene escala vigente para este mes — se usa el sueldo cargado a mano");
     const parteBlanco = calcularParte(
-      { tipo_pago: emp.tipo_pago, sueldo_mensual: emp.sueldo_mensual, valor_hora: emp.valor_hora, valor_dia: emp.valor_dia },
+      escala
+        ? { tipo_pago: "mensual", sueldo_mensual: escala.basico * emp.fraccion_jornada, valor_hora: emp.valor_hora, valor_dia: null }
+        : { tipo_pago: emp.tipo_pago, sueldo_mensual: emp.sueldo_mensual, valor_hora: emp.valor_hora, valor_dia: emp.valor_dia },
       ctx,
       advertencias
     );
@@ -3479,7 +3663,7 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
     // Aportes/contribuciones legales (jubilación, ley 19032, obra social,
     // sindical, presentismo, costo empleador) solo aplican a la parte blanca
     // — la informal no está registrada, no tiene aportes.
-    const legal = emp.tipo_pago !== null ? calcularAportesLegales(parteBlanco, configAportesEmpleado(configLegal, emp, convenios)) : null;
+    const legal = parteBlanco.tipo_pago !== null ? calcularAportesLegales(parteBlanco, configAportesEmpleado(configLegal, emp, convenios)) : null;
 
     const valorHoraEquivalente =
       [parteBlanco, parteInformal].reduce((acc, p) => acc + (p?.tipo_pago === "mensual" ? p.valor_hora_equivalente ?? 0 : 0), 0) || null;
@@ -3489,7 +3673,11 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
     // Los adelantos son un solo pozo (no hay "adelanto blanco/informal" al
     // cargarlo) pero se descuentan primero de lo informal (parte informal +
     // horas extra) — y solo el excedente, si lo hay, de la parte blanca.
-    const brutoInformal = (parteInformal?.bruto ?? 0) + horasExtra.monto;
+    // Modo 'complemento': la parte informal es el total pactado, así que solo
+    // se paga lo que falta después del neto del recibo (nunca negativo).
+    const informalPactado = parteInformal?.bruto ?? 0;
+    const informalAPagar = emp.modo_informal === "complemento" ? Math.max(0, informalPactado - netoBlanco) : informalPactado;
+    const brutoInformal = informalAPagar + horasExtra.monto;
     const adelantosSobreInformal = Math.min(adelantos, brutoInformal);
     const adelantosSobreBlanco = adelantos - adelantosSobreInformal;
     const totalInformal = brutoInformal - adelantosSobreInformal;
@@ -3507,6 +3695,17 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
       adelantos_informal: adelantosSobreInformal,
       informal: parteInformal ? { ...sinBruto(parteInformal), total: parteInformal.bruto } : null,
       horas_extra: horasExtra,
+      escala: escala
+        ? {
+            categoria: categoriasPorId.get(escala.categoria_id) ?? "",
+            vigente_desde: escala.vigente_desde,
+            basico: escala.basico,
+            no_remunerativo: escala.no_remunerativo,
+            fraccion_jornada: emp.fraccion_jornada,
+          }
+        : null,
+      modo_informal: emp.modo_informal,
+      informal_pactado: informalPactado,
       total_informal: totalInformal,
       total: totalBlanco + totalInformal,
       advertencias,

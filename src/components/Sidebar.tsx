@@ -49,6 +49,7 @@ const NAV_GROUPS: NavGroup[] = [
     icon: "💵",
     links: [
       { href: "/liquidacion", label: "Liquidación", icon: "💵" },
+      { href: "/escalas", label: "Escalas salariales", icon: "📊" },
       { href: "/adelantos", label: "Adelantos", icon: "💸" },
       { href: "/caja", label: "Caja", icon: "💰" },
     ],

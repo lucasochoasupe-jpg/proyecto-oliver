@@ -35,6 +35,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     convenio_id?: number | null;
     jornada_reducida?: number;
     fecha_alta?: string | null;
+    categoria_id?: number | null;
+    fraccion_jornada?: number;
+    modo_informal?: "adicional" | "complemento";
   };
   updateEmpleado(Number(id), body);
   return NextResponse.json({ ok: true });

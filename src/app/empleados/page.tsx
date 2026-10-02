@@ -33,6 +33,9 @@ interface Empleado {
   convenio_id: number | null;
   jornada_reducida: number;
   fecha_alta: string | null;
+  categoria_id: number | null;
+  fraccion_jornada: number;
+  modo_informal: "adicional" | "complemento";
   contacto_emergencia_nombre: string | null;
   contacto_emergencia_telefono: string | null;
   cbu: string | null;
@@ -145,12 +148,16 @@ export default function EmpleadosPage() {
         convenio_id: string;
         jornada_reducida: boolean;
         fecha_alta: string;
+        categoria_id: string;
+        fraccion_jornada_pct: string;
+        modo_informal: "adicional" | "complemento";
       }
     >
   >({});
   const [guardando, setGuardando] = useState<number | null>(null);
   const [guardado, setGuardado] = useState<number | null>(null);
   const [convenios, setConvenios] = useState<{ id: number; codigo: string; nombre: string }[]>([]);
+  const [categorias, setCategorias] = useState<{ id: number; convenio_id: number; nombre: string }[]>([]);
 
   // Nuevo empleado
   const [mostrarForm, setMostrarForm] = useState(false);
@@ -167,11 +174,13 @@ export default function EmpleadosPage() {
   const [deleting, setDeleting] = useState(false);
 
   const fetchData = useCallback(async () => {
-    const [res, resSaldos, resConvenios] = await Promise.all([
+    const [res, resSaldos, resConvenios, resCategorias] = await Promise.all([
       fetch("/api/empleados"),
       fetch("/api/vacaciones"),
       fetch("/api/convenios"),
+      fetch("/api/escalas/categorias"),
     ]);
+    setCategorias((await resCategorias.json()) as { id: number; convenio_id: number; nombre: string }[]);
     const data = (await res.json()) as Empleado[];
     const saldosData = (await resSaldos.json()) as SaldoVacaciones[];
     setConvenios((await resConvenios.json()) as { id: number; codigo: string; nombre: string }[]);
@@ -222,6 +231,9 @@ export default function EmpleadosPage() {
         convenio_id: e.convenio_id !== null ? String(e.convenio_id) : "",
         jornada_reducida: e.jornada_reducida === 1,
         fecha_alta: e.fecha_alta ?? "",
+        categoria_id: e.categoria_id !== null ? String(e.categoria_id) : "",
+        fraccion_jornada_pct: String(Math.round(e.fraccion_jornada * 10000) / 100),
+        modo_informal: e.modo_informal,
       },
     }));
   }
@@ -268,6 +280,9 @@ export default function EmpleadosPage() {
         convenio_id: e.convenio_id ? Number(e.convenio_id) : null,
         jornada_reducida: e.jornada_reducida ? 1 : 0,
         fecha_alta: e.fecha_alta.trim() || null,
+        categoria_id: e.categoria_id ? Number(e.categoria_id) : null,
+        fraccion_jornada: Number(e.fraccion_jornada_pct) > 0 ? Number(e.fraccion_jornada_pct) / 100 : 1,
+        modo_informal: e.modo_informal,
       }),
     });
     await fetchData();
@@ -341,6 +356,9 @@ export default function EmpleadosPage() {
       convenio_id: null,
       jornada_reducida: 0,
       fecha_alta: null,
+      categoria_id: null,
+      fraccion_jornada: 1,
+      modo_informal: "adicional",
     };
     setNuevoApellido("");
     setNuevoNombrePila("");
@@ -1124,7 +1142,9 @@ export default function EmpleadosPage() {
                     <Campo label="Convenio colectivo">
                       <select
                         value={ed.convenio_id}
-                        onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], convenio_id: e.target.value } }))}
+                        onChange={(e) =>
+                          setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], convenio_id: e.target.value, categoria_id: "" } }))
+                        }
                         className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] bg-white"
                       >
                         <option value="">Sin asignar</option>
@@ -1133,6 +1153,49 @@ export default function EmpleadosPage() {
                             {c.nombre}
                           </option>
                         ))}
+                      </select>
+                    </Campo>
+                    <Campo label="Categoría (escala)">
+                      <select
+                        value={ed.categoria_id}
+                        disabled={!ed.convenio_id}
+                        onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], categoria_id: e.target.value } }))}
+                        className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] bg-white disabled:bg-[#FAF7F2]"
+                      >
+                        <option value="">Sin categoría (sueldo a mano)</option>
+                        {categorias
+                          .filter((c) => String(c.convenio_id) === ed.convenio_id)
+                          .map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.nombre}
+                            </option>
+                          ))}
+                      </select>
+                    </Campo>
+                    <Campo label="% de la jornada completa">
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={ed.fraccion_jornada_pct}
+                        onChange={(e) =>
+                          setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], fraccion_jornada_pct: e.target.value } }))
+                        }
+                        className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-28"
+                      />
+                    </Campo>
+                    <Campo label="Parte informal" className="col-span-2">
+                      <select
+                        value={ed.modo_informal}
+                        onChange={(e) =>
+                          setEditando((p) => ({
+                            ...p,
+                            [emp.id]: { ...p[emp.id], modo_informal: e.target.value as "adicional" | "complemento" },
+                          }))
+                        }
+                        className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] bg-white"
+                      >
+                        <option value="adicional">Se suma aparte del recibo</option>
+                        <option value="complemento">Completa hasta el total pactado (total − neto del recibo)</option>
                       </select>
                     </Campo>
                     <Campo label="Jornada">
