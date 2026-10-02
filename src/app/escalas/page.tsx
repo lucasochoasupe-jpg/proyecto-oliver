@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import PageHeader from "@/components/PageHeader";
+import ParitariasPendientes from "@/components/ParitariasPendientes";
 
 interface Convenio {
   id: number;
@@ -60,6 +61,10 @@ export default function EscalasPage() {
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [nuevaCategoria, setNuevaCategoria] = useState("");
+  // "Cargar escala" desde el aviso de paritaria: cambia al convenio y abre el
+  // formulario cuando terminan de cargar sus escalas.
+  const [abrirAlCargar, setAbrirAlCargar] = useState(false);
+  const [recargarAviso, setRecargarAviso] = useState(0);
 
   useEffect(() => {
     fetch("/api/convenios")
@@ -169,6 +174,7 @@ export default function EscalasPage() {
     }
     setEditando(null);
     cargar(convenioId);
+    setRecargarAviso((n) => n + 1);
   }
 
   async function borrarVigencia(mes: string) {
@@ -194,6 +200,14 @@ export default function EscalasPage() {
     cargar(convenioId);
   }
 
+  useEffect(() => {
+    if (abrirAlCargar && !cargando) {
+      setAbrirAlCargar(false);
+      abrirNueva();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [abrirAlCargar, cargando]);
+
   const columnas = vigencias.slice(0, 5);
 
   return (
@@ -208,6 +222,17 @@ export default function EscalasPage() {
             (ficha → Datos legales) el sueldo en blanco se les calcula con la escala vigente en el mes que se liquida.
           </p>
         </div>
+
+        <ParitariasPendientes
+          recargar={recargarAviso}
+          onCargar={(id) => {
+            if (id === convenioId) abrirNueva();
+            else {
+              setConvenioId(id);
+              setAbrirAlCargar(true);
+            }
+          }}
+        />
 
         <div className="flex flex-wrap items-center gap-2">
           {convenios.map((c) => (

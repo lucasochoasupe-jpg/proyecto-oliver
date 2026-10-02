@@ -9,6 +9,7 @@ import {
   markOutboxSent,
   getConnectionState,
 } from "../src/lib/db";
+import { revisarParitarias } from "../src/lib/paritarias";
 
 const RESTART_FLAG = path.resolve(process.cwd(), "data", ".restart");
 const AUTH_DIR = path.resolve(process.cwd(), "auth");
@@ -58,6 +59,12 @@ setInterval(async () => {
   console.log("[bot] Iniciando nueva sesión (se generará QR nuevo)...");
   start().catch((err) => console.error("[bot] Error al reiniciar:", err));
 }, 1_000);
+
+// ── Aviso de paritarias nuevas (web de AIPAR) ────────────────────────────────
+const revisarParitariasSeguro = () =>
+  revisarParitarias().catch((err) => console.error("[paritarias] Error revisando:", err));
+setTimeout(revisarParitariasSeguro, 60_000);
+setInterval(revisarParitariasSeguro, 6 * 3600_000);
 
 // ── Arranque inicial ──────────────────────────────────────────────────────────
 console.log("[bot] Iniciando agente WhatsApp...");

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { borrarVigenciaEscala, guardarEscalas, listCategoriasConvenio, listEscalas } from "@/lib/db";
+import { borrarVigenciaEscala, guardarEscalas, listCategoriasConvenio, listEscalas, marcarParitariasCargadas } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -21,10 +21,11 @@ export async function POST(req: NextRequest) {
   }
   const filas = (body.filas ?? []).filter((f) => Number(f.categoria_id) > 0 && Number(f.basico) > 0);
   if (filas.length === 0) return NextResponse.json({ error: "No hay montos para guardar" }, { status: 400 });
-  guardarEscalas(
+  const convenios = guardarEscalas(
     body.vigente_desde,
     filas.map((f) => ({ categoria_id: Number(f.categoria_id), basico: Number(f.basico), no_remunerativo: Number(f.no_remunerativo) || 0 }))
   );
+  for (const id of convenios) marcarParitariasCargadas(id);
   return NextResponse.json({ ok: true });
 }
 

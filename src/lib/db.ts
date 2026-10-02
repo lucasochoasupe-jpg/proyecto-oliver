@@ -155,6 +155,19 @@ try { db.exec("ALTER TABLE empleados ADD COLUMN fecha_alta TEXT"); } catch {}
   }
 }
 try { db.exec("ALTER TABLE empleados ADD COLUMN categoria_id INTEGER REFERENCES categorias_convenio(id)"); } catch {}
+
+// PDFs de escalas publicados en la web de AIPAR (ver src/lib/paritarias.ts):
+// cada uno nuevo queda 'pendiente' hasta que alguien carga la escala (o lo
+// descarta), y mientras tanto se le recuerda a Administración por WhatsApp.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS paritarias_publicadas (
+    url TEXT PRIMARY KEY,
+    convenio_id INTEGER NOT NULL REFERENCES convenios(id),
+    detectada_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    estado TEXT NOT NULL DEFAULT 'pendiente', -- pendiente | cargada | descartada
+    ultimo_aviso_at INTEGER
+  );
+`);
 // Fracción de la jornada completa del convenio que cumple (1 = completa, 0.5 =
 // media jornada): el sueldo de escala se multiplica por esto.
 try { db.exec("ALTER TABLE empleados ADD COLUMN fraccion_jornada REAL NOT NULL DEFAULT 1"); } catch {}
@@ -2645,7 +2658,7 @@ export function escalaVigente(categoriaId: number, mes: string): Escala | null {
 }
 
 // Carga (o corrige) los valores de una vigencia para varias categorías a la vez.
-export function guardarEscalas(vigenteDesde: string, filas: { categoria_id: number; basico: number; no_remunerativo: number }[]): void {
+export function guardarEscalas(vigenteDesde: string, filas: { categoria_id: number; basico: number; no_remunerativo: number }[]): number[] {
   const stmt = db.prepare(
     `INSERT INTO escalas (categoria_id, vigente_desde, basico, no_remunerativo) VALUES (?, ?, ?, ?)
      ON CONFLICT(categoria_id, vigente_desde) DO UPDATE SET basico = excluded.basico, no_remunerativo = excluded.no_remunerativo`
@@ -2658,12 +2671,62 @@ export function guardarEscalas(vigenteDesde: string, filas: { categoria_id: numb
     db.exec("ROLLBACK");
     throw e;
   }
+  const ids = filas.map((f) => f.categoria_id);
+  return (
+    db
+      .prepare(`SELECT DISTINCT convenio_id FROM categorias_convenio WHERE id IN (${ids.map(() => "?").join(",")})`)
+      .all(...ids) as { convenio_id: number }[]
+  ).map((r) => r.convenio_id);
 }
 
 export function borrarVigenciaEscala(convenioId: number, vigenteDesde: string): void {
   db.prepare(
     "DELETE FROM escalas WHERE vigente_desde = ? AND categoria_id IN (SELECT id FROM categorias_convenio WHERE convenio_id = ?)"
   ).run(vigenteDesde, convenioId);
+}
+
+// ── Paritarias publicadas ────────────────────────────────────────────────
+
+export interface ParitariaPublicada {
+  url: string;
+  convenio_id: number;
+  detectada_at: number;
+  estado: "pendiente" | "cargada" | "descartada";
+  ultimo_aviso_at: number | null;
+}
+
+export function contarParitariasConocidas(convenioId: number): number {
+  return (db.prepare("SELECT COUNT(*) AS n FROM paritarias_publicadas WHERE convenio_id = ?").get(convenioId) as { n: number }).n;
+}
+
+// Inserta la URL si no se conocía; devuelve true si es nueva.
+export function registrarParitaria(url: string, convenioId: number, estado: ParitariaPublicada["estado"]): boolean {
+  const info = db
+    .prepare("INSERT OR IGNORE INTO paritarias_publicadas (url, convenio_id, estado) VALUES (?, ?, ?)")
+    .run(url, convenioId, estado);
+  return Number(info.changes) > 0;
+}
+
+export function listParitariasPendientes(): (ParitariaPublicada & { convenio_nombre: string })[] {
+  return db
+    .prepare(
+      `SELECT p.*, c.nombre AS convenio_nombre FROM paritarias_publicadas p JOIN convenios c ON c.id = p.convenio_id
+       WHERE p.estado = 'pendiente' ORDER BY p.detectada_at`
+    )
+    .all() as unknown as (ParitariaPublicada & { convenio_nombre: string })[];
+}
+
+export function marcarParitaria(url: string, estado: ParitariaPublicada["estado"]): void {
+  db.prepare("UPDATE paritarias_publicadas SET estado = ? WHERE url = ?").run(estado, url);
+}
+
+// Cargar una escala nueva de un convenio da por cargadas sus paritarias pendientes.
+export function marcarParitariasCargadas(convenioId: number): void {
+  db.prepare("UPDATE paritarias_publicadas SET estado = 'cargada' WHERE convenio_id = ? AND estado = 'pendiente'").run(convenioId);
+}
+
+export function marcarParitariaAvisada(url: string): void {
+  db.prepare("UPDATE paritarias_publicadas SET ultimo_aviso_at = unixepoch() WHERE url = ?").run(url);
 }
 
 // ── Feriados ─────────────────────────────────────────────────────────────
