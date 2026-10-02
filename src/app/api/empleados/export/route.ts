@@ -48,6 +48,7 @@ export async function GET() {
     { header: "Contacto de emergencia (nombre)", key: "contacto_emergencia_nombre", width: 26 },
     { header: "Contacto de emergencia (teléfono)", key: "contacto_emergencia_telefono", width: 24 },
     { header: "Fecha de ingreso", key: "fecha_ingreso", width: 16 },
+    { header: "Fecha de alta (recibo)", key: "fecha_alta", width: 18 },
     { header: "Categoría laboral", key: "categoria_laboral", width: 20 },
     { header: "Banco", key: "banco", width: 20 },
     { header: "Tipo de pago", key: "tipo_pago", width: 14 },
@@ -73,6 +74,7 @@ export async function GET() {
       contacto_emergencia_nombre: e.contacto_emergencia_nombre ?? "",
       contacto_emergencia_telefono: e.contacto_emergencia_telefono ?? "",
       fecha_ingreso: formatFechaISO(e.fecha_ingreso),
+      fecha_alta: formatFechaISO(e.fecha_alta),
       categoria_laboral: e.categoria_laboral ?? "",
       banco: e.banco ?? "",
       tipo_pago:

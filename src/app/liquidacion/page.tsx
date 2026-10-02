@@ -26,8 +26,8 @@ interface ParteDetalle {
   dias_justificados_pagos: number;
   horas_justificadas_pagas: number;
   monto_ausencia_justificada: number;
+  dias_feriado: number;
   dias_trabajados: number | null;
-  horas_extra: number | null;
   total_por_horas: number | null;
   total: number;
 }
@@ -39,6 +39,9 @@ interface AportesLegales {
   aporte_ley19032: number;
   aporte_obra_social: number;
   aporte_sindical: number;
+  aporte_sepelio: number;
+  aporte_colonia: number;
+  aporte_os_jornada_reducida: number;
   total_aportes_empleado: number;
   costo_art: number;
   costo_jubilacion_patronal: number;
@@ -57,6 +60,8 @@ interface LiquidacionEmpleado extends Omit<ParteDetalle, "total"> {
   legal: AportesLegales | null;
   total_blanco: number;
   informal: ParteDetalle | null;
+  horas_extra: { horas: number; valor_hora: number | null; monto: number };
+  total_informal: number;
   total: number;
   advertencias: string[];
 }
@@ -109,12 +114,6 @@ function DetalleParte({ p }: { p: ParteDetalle }) {
               <p>
                 Días trabajados (con jornal): {p.dias_trabajados} × {p.valor_dia ? formatMoneda(p.valor_dia) : "—"}
               </p>
-              {p.horas_extra !== null && p.horas_extra > 0 && (
-                <p>
-                  Horas extra (por encima del turno pactado): {formatHoras(p.horas_extra)}
-                  {p.valor_hora && ` (+ ${formatMoneda(p.horas_extra * p.valor_hora)})`}
-                </p>
-              )}
               <p>
                 Ausencias sin aviso: {p.dias_ausencia} día{p.dias_ausencia === 1 ? "" : "s"} — no genera jornal ese día
               </p>
@@ -122,8 +121,17 @@ function DetalleParte({ p }: { p: ParteDetalle }) {
                 <p className="text-emerald-700">
                   ✓ Ausencias justificadas con goce: {p.dias_ausencia_justificada} día
                   {p.dias_ausencia_justificada === 1 ? "" : "s"}
-                  {p.monto_ausencia_justificada > 0 &&
-                    ` — se pagan las horas del turno (${formatHoras(p.horas_justificadas_pagas)} × ${p.valor_hora ? formatMoneda(p.valor_hora) : "—"} = + ${formatMoneda(p.monto_ausencia_justificada)})`}
+                </p>
+              )}
+              {p.dias_feriado > 0 && (
+                <p className="text-emerald-700">
+                  ✓ Feriados no trabajados: {p.dias_feriado} día{p.dias_feriado === 1 ? "" : "s"} — no cuentan como falta
+                </p>
+              )}
+              {p.monto_ausencia_justificada > 0 && (
+                <p className="text-emerald-700">
+                  Se pagan las horas de esos turnos ({formatHoras(p.horas_justificadas_pagas)} ×{" "}
+                  {p.valor_hora ? formatMoneda(p.valor_hora) : "—"} = + {formatMoneda(p.monto_ausencia_justificada)})
                 </p>
               )}
               {p.dias_sin_goce > 0 && (
@@ -164,6 +172,11 @@ function DetalleParte({ p }: { p: ParteDetalle }) {
               {p.horas_ausencia_justificada > 0 && ` (${formatHoras(p.horas_ausencia_justificada)})`} — no se descuentan
             </p>
           )}
+          {p.dias_feriado > 0 && (
+            <p className="text-emerald-700">
+              ✓ Feriados no trabajados: {p.dias_feriado} día{p.dias_feriado === 1 ? "" : "s"} — no se descuentan ni afectan el presentismo
+            </p>
+          )}
           {p.dias_sin_goce > 0 && (
             <p className="text-sky-700">
               Motivo personal sin goce: {p.dias_sin_goce} día{p.dias_sin_goce === 1 ? "" : "s"}
@@ -188,7 +201,10 @@ function DetalleLegal({ legal }: { legal: AportesLegales }) {
       <p>
         Aportes del empleado: jubilación {formatMoneda(legal.aporte_jubilacion)} · ley 19032{" "}
         {formatMoneda(legal.aporte_ley19032)} · obra social {formatMoneda(legal.aporte_obra_social)}
-        {legal.aporte_sindical > 0 && ` · sindical ${formatMoneda(legal.aporte_sindical)}`} — total -{" "}
+        {legal.aporte_sindical > 0 && ` · sindical ${formatMoneda(legal.aporte_sindical)}`}
+        {legal.aporte_sepelio > 0 && ` · sepelio ${formatMoneda(legal.aporte_sepelio)}`}
+        {legal.aporte_colonia > 0 && ` · colonia de vacaciones ${formatMoneda(legal.aporte_colonia)}`}
+        {legal.aporte_os_jornada_reducida > 0 && ` · obra social jornada reducida ${formatMoneda(legal.aporte_os_jornada_reducida)}`} — total -{" "}
         {formatMoneda(legal.total_aportes_empleado)}
       </p>
       <p className="text-[#8B6347]">
@@ -532,9 +548,9 @@ function LiquidacionMensual() {
                       </td>
                       <td className="px-4 py-3 font-mono text-[#2C1810] font-semibold" data-label="Total">
                         {formatMoneda(f.total)}
-                        {f.informal && (
+                        {(f.informal || f.horas_extra.monto > 0) && (
                           <div className="text-[10px] font-normal text-[#8B6347] mt-0.5">
-                            Blanco {formatMoneda(f.total_blanco)} · Informal {formatMoneda(f.informal.total)}
+                            Blanco {formatMoneda(f.total_blanco)} · Informal {formatMoneda(f.total_informal)}
                           </div>
                         )}
                       </td>
@@ -563,23 +579,32 @@ function LiquidacionMensual() {
                             {f.adelantos > 0 && (
                               <p className="text-red-600">
                                 Adelantos en el período: - {formatMoneda(f.adelantos)}
-                                {f.informal && f.adelantos_informal > 0 && f.adelantos_blanco > 0 && (
+                                {f.adelantos_informal > 0 && f.adelantos_blanco > 0 && (
                                   <> (informal - {formatMoneda(f.adelantos_informal)} · blanco - {formatMoneda(f.adelantos_blanco)})</>
                                 )}
-                                {f.informal && f.adelantos_informal > 0 && f.adelantos_blanco === 0 && " (descontado de la parte informal)"}
+                                {f.adelantos_informal > 0 && f.adelantos_blanco === 0 && " (descontado de la parte informal)"}
                               </p>
                             )}
-                            {f.informal && <p className="font-semibold text-[#2C1810]">Blanco</p>}
+                            {(f.informal || f.horas_extra.monto > 0) && <p className="font-semibold text-[#2C1810]">Blanco</p>}
                             <DetalleParte p={{ ...f, total: f.total_blanco }} />
                             {f.legal && <DetalleLegal legal={f.legal} />}
-                            {f.informal && (
+                            {(f.informal || f.horas_extra.monto > 0) && (
                               <>
                                 <p className="font-semibold text-[#2C1810] pt-2 border-t border-[#EDE0CC] mt-2">
-                                  Informal —{" "}
-                                  {f.informal.tipo_pago === "mensual" ? "Mensual" : f.informal.tipo_pago === "hora" ? "Por hora" : "Por día"}
+                                  Informal
+                                  {f.informal &&
+                                    ` — ${f.informal.tipo_pago === "mensual" ? "Mensual" : f.informal.tipo_pago === "hora" ? "Por hora" : "Por día"}`}
                                 </p>
-                                <DetalleParte p={f.informal} />
-                                <p className="font-medium">Total informal: {formatMoneda(f.informal.total)}</p>
+                                {f.informal && <DetalleParte p={f.informal} />}
+                                {f.horas_extra.horas > 0 && (
+                                  <p>
+                                    Horas extra (por encima del turno pactado): {formatHoras(f.horas_extra.horas)}
+                                    {f.horas_extra.valor_hora !== null &&
+                                      ` × ${formatMoneda(f.horas_extra.valor_hora)} = + ${formatMoneda(f.horas_extra.monto)}`}
+                                  </p>
+                                )}
+                                {f.adelantos_informal > 0 && <p className="text-red-600">Adelantos: - {formatMoneda(f.adelantos_informal)}</p>}
+                                <p className="font-medium">Total informal: {formatMoneda(f.total_informal)}</p>
                               </>
                             )}
                           </div>
@@ -656,7 +681,7 @@ function LiquidacionMensual() {
                             className="h-4 w-4 rounded border-[#D4A843] text-[#2C1810] focus:ring-[#D4A843]"
                           />
                           <span className="text-sm text-[#2C1810]">{f.nombre}</span>
-                          {f.informal && <span className="text-[10px] text-amber-700">+ informal</span>}
+                          {(f.informal || f.horas_extra.monto > 0) && <span className="text-[10px] text-amber-700">+ informal</span>}
                         </label>
                       ))
                     )}

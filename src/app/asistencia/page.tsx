@@ -1061,7 +1061,11 @@ function UnifiedTableSection({
                           Inasistencia
                         </td>
                         <td className="px-4 py-2.5" data-label="Estado">
-                          {a.justificada ? (
+                          {a.feriado ? (
+                            <span className="text-xs bg-sky-100 text-sky-700 border border-sky-200 px-2 py-0.5 rounded-full font-medium">
+                              Feriado
+                            </span>
+                          ) : a.justificada ? (
                             <span className="text-xs bg-emerald-100 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full font-medium">
                               ✓ Con aviso
                             </span>

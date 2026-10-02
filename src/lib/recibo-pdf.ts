@@ -70,13 +70,15 @@ export interface ComprobanteInformalData {
   empleado: { nombre: string };
   desde: string; // DD/MM/YYYY
   hasta: string; // DD/MM/YYYY
-  tipo_pago: "mensual" | "hora" | "dia";
+  tipo_pago: "mensual" | "hora" | "dia" | null; // null: no tiene parte informal, solo horas extra
   sueldo_o_jornal: number; // valor nominal
   descuento_tardanza: number;
   descuento_ausencia: number;
   descuento_sin_goce: number; // motivo personal aprobado sin goce de sueldo
   monto_ausencia_justificada: number; // faltas con goce pagadas: horas del turno × valor hora (solo por día)
-  horas_extra_monto: number; // horas_extra × valor_hora, ya en pesos (0 si no aplica)
+  horas_extra: number; // horas por encima del turno pactado (se pagan siempre en negro)
+  horas_extra_valor_hora: number | null;
+  horas_extra_monto: number; // horas_extra × valor hora simple, ya en pesos (0 si no aplica)
   adelantos: number; // adelantos que quedaron a cargo de esta parte
   total: number;
 }
@@ -284,6 +286,10 @@ export function generarReciboPdf(data: ReciboData): Promise<Buffer> {
       `- ${formatARS(data.legal.aporte_obra_social)}`,
     ]);
     if (data.legal.aporte_sindical > 0) filasConceptos.push(["Aporte Sindical", `- ${formatARS(data.legal.aporte_sindical)}`]);
+    if (data.legal.aporte_sepelio > 0) filasConceptos.push(["Fdo. Comp. y Sepelio", `- ${formatARS(data.legal.aporte_sepelio)}`]);
+    if (data.legal.aporte_colonia > 0) filasConceptos.push(["Colonia de Vacaciones", `- ${formatARS(data.legal.aporte_colonia)}`]);
+    if (data.legal.aporte_os_jornada_reducida > 0)
+      filasConceptos.push(["O. Social Jornada Reducida", `- ${formatARS(data.legal.aporte_os_jornada_reducida)}`]);
 
     y = dibujarTabla(
       doc,
@@ -324,10 +330,13 @@ export function generarReciboPdf(data: ReciboData): Promise<Buffer> {
     doc.font("Helvetica-Bold").fontSize(9).fillColor(COLOR.header).text("Composición del costo total", left, y);
     y += 16;
     dibujarGraficoTorta(doc, left + 55, y + 55, 50, [
-      { label: "Sindical", valor: data.legal.aporte_sindical },
+      { label: "Sindical", valor: data.legal.aporte_sindical + data.legal.aporte_sepelio + data.legal.aporte_colonia },
       { label: "Jubilación", valor: data.legal.aporte_jubilacion + data.legal.costo_jubilacion_patronal },
       { label: "Ley 19032 / INSSJP", valor: data.legal.aporte_ley19032 },
-      { label: "Obra Social", valor: data.legal.aporte_obra_social + data.legal.costo_obra_social_patronal },
+      {
+        label: "Obra Social",
+        valor: data.legal.aporte_obra_social + data.legal.aporte_os_jornada_reducida + data.legal.costo_obra_social_patronal,
+      },
       { label: "ART y otros", valor: data.legal.costo_art + data.legal.costo_seguro_vida },
       { label: "Sueldo Neto", valor: neto },
     ]);
@@ -456,6 +465,10 @@ export function generarReciboAguinaldoPdf(data: ReciboAguinaldoData): Promise<Bu
       `- ${formatARS(data.legal.aporte_obra_social)}`,
     ]);
     if (data.legal.aporte_sindical > 0) filasConceptos.push(["Aporte Sindical", `- ${formatARS(data.legal.aporte_sindical)}`]);
+    if (data.legal.aporte_sepelio > 0) filasConceptos.push(["Fdo. Comp. y Sepelio", `- ${formatARS(data.legal.aporte_sepelio)}`]);
+    if (data.legal.aporte_colonia > 0) filasConceptos.push(["Colonia de Vacaciones", `- ${formatARS(data.legal.aporte_colonia)}`]);
+    if (data.legal.aporte_os_jornada_reducida > 0)
+      filasConceptos.push(["O. Social Jornada Reducida", `- ${formatARS(data.legal.aporte_os_jornada_reducida)}`]);
 
     y = dibujarTabla(
       doc,
@@ -614,8 +627,13 @@ export function generarComprobanteInformalPdf(data: ComprobanteInformalData): Pr
 
     const labelBase =
       data.tipo_pago === "mensual" ? "Sueldo Mensual (informal)" : data.tipo_pago === "hora" ? "Valor Hora (informal)" : "Jornal (informal)";
-    const filas: string[][] = [[labelBase, formatARS(data.sueldo_o_jornal)]];
-    if (data.horas_extra_monto > 0) filas.push(["Horas extra", `+ ${formatARS(data.horas_extra_monto)}`]);
+    const filas: string[][] = data.tipo_pago ? [[labelBase, formatARS(data.sueldo_o_jornal)]] : [];
+    if (data.horas_extra_monto > 0) {
+      const h = Math.floor(data.horas_extra);
+      const m = Math.round((data.horas_extra - h) * 60);
+      const detalle = data.horas_extra_valor_hora ? ` (${h}h ${String(m).padStart(2, "0")}m × ${formatARS(data.horas_extra_valor_hora)})` : "";
+      filas.push([`Horas extra${detalle}`, `+ ${formatARS(data.horas_extra_monto)}`]);
+    }
     if (data.monto_ausencia_justificada > 0) filas.push(["Ausencias justificadas con goce", `+ ${formatARS(data.monto_ausencia_justificada)}`]);
     if (data.descuento_tardanza > 0) filas.push(["Descuento por tardanzas", `- ${formatARS(data.descuento_tardanza)}`]);
     if (data.descuento_ausencia > 0) filas.push(["Descuento por ausencias", `- ${formatARS(data.descuento_ausencia)}`]);

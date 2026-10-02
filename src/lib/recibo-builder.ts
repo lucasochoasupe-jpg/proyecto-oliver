@@ -53,8 +53,8 @@ export function construirReciboBlanco(
       cuil: empleado.cuil,
       categoria_laboral: empleado.categoria_laboral,
       banco: empleado.banco ?? config.banco_default,
-      fecha_ingreso: empleado.fecha_ingreso,
-      antiguedad: antiguedadTexto(empleado.fecha_ingreso, hastaISO),
+      fecha_ingreso: empleado.fecha_alta ?? empleado.fecha_ingreso,
+      antiguedad: antiguedadTexto(empleado.fecha_alta ?? empleado.fecha_ingreso, hastaISO),
     },
     desde: formatFechaISO(desdeISO),
     hasta: formatFechaISO(hastaISO),
@@ -75,26 +75,35 @@ export function construirComprobanteInformal(
   desdeISO: string,
   hastaISO: string
 ): ComprobanteInformalData | null {
-  if (!fila.informal) return null;
+  // Sin parte informal igual hay comprobante si tiene horas extra (se pagan
+  // siempre en negro).
+  if (!fila.informal && fila.horas_extra.monto === 0) return null;
   const p = fila.informal;
 
-  const sueldoONormal = p.tipo_pago === "mensual" ? p.sueldo_mensual ?? 0 : p.tipo_pago === "hora" ? p.valor_hora ?? 0 : p.valor_dia ?? 0;
-  const horasExtraMonto = p.horas_extra && p.valor_hora ? p.horas_extra * p.valor_hora : 0;
+  const sueldoONormal = !p
+    ? 0
+    : p.tipo_pago === "mensual"
+    ? p.sueldo_mensual ?? 0
+    : p.tipo_pago === "hora"
+    ? p.valor_hora ?? 0
+    : p.valor_dia ?? 0;
 
   return {
     empresa: { razon_social: config.empresa_razon_social },
     empleado: { nombre: empleado.nombre },
     desde: formatFechaISO(desdeISO),
     hasta: formatFechaISO(hastaISO),
-    tipo_pago: p.tipo_pago!,
+    tipo_pago: p?.tipo_pago ?? null,
     sueldo_o_jornal: sueldoONormal,
-    descuento_tardanza: p.descuento_tardanza,
-    descuento_ausencia: p.descuento_ausencia,
-    descuento_sin_goce: p.descuento_sin_goce,
-    monto_ausencia_justificada: p.monto_ausencia_justificada,
-    horas_extra_monto: horasExtraMonto,
+    descuento_tardanza: p?.descuento_tardanza ?? 0,
+    descuento_ausencia: p?.descuento_ausencia ?? 0,
+    descuento_sin_goce: p?.descuento_sin_goce ?? 0,
+    monto_ausencia_justificada: p?.monto_ausencia_justificada ?? 0,
+    horas_extra: fila.horas_extra.horas,
+    horas_extra_valor_hora: fila.horas_extra.valor_hora,
+    horas_extra_monto: fila.horas_extra.monto,
     adelantos: fila.adelantos_informal,
-    total: p.total,
+    total: fila.total_informal,
   };
 }
 
@@ -133,8 +142,8 @@ export function construirReciboAguinaldo(
       cuil: empleado.cuil,
       categoria_laboral: empleado.categoria_laboral,
       banco: empleado.banco ?? config.banco_default,
-      fecha_ingreso: empleado.fecha_ingreso,
-      antiguedad: antiguedadTexto(empleado.fecha_ingreso, rangoISO.hasta),
+      fecha_ingreso: empleado.fecha_alta ?? empleado.fecha_ingreso,
+      antiguedad: antiguedadTexto(empleado.fecha_alta ?? empleado.fecha_ingreso, rangoISO.hasta),
     },
     semestre_label: semestreLabel(semestre, rangoISO),
     mejor_remuneracion: fila.blanco.mejor_remuneracion,

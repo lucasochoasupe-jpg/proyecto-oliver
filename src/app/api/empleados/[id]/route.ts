@@ -32,6 +32,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     contacto_emergencia_nombre?: string | null;
     contacto_emergencia_telefono?: string | null;
     cbu?: string | null;
+    convenio_id?: number | null;
+    jornada_reducida?: number;
+    fecha_alta?: string | null;
   };
   updateEmpleado(Number(id), body);
   return NextResponse.json({ ok: true });

@@ -56,6 +56,7 @@ interface AusenciaRow {
   hora_fin: string;
   horas: number;
   justificada: boolean;
+  feriado: string | null;
 }
 
 interface CumplimientoRow {
@@ -1261,7 +1262,11 @@ export default function TurnosPage() {
                           <td className="px-4 py-2.5 text-[#8B6347]" data-label="Fecha">{formatFechaISO(a.fecha)}</td>
                           <td className="px-4 py-2.5 font-mono text-[#2C1810]" data-label="Horario esperado">{a.hora_inicio}–{a.hora_fin}</td>
                           <td className="px-4 py-2.5" data-label="Aviso">
-                            {a.justificada ? (
+                            {a.feriado ? (
+                              <span className="text-xs bg-sky-100 text-sky-700 border border-sky-200 px-2 py-0.5 rounded-full font-medium">
+                                Feriado
+                              </span>
+                            ) : a.justificada ? (
                               <span className="text-xs bg-emerald-100 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full font-medium">
                                 ✓ Con aviso
                               </span>

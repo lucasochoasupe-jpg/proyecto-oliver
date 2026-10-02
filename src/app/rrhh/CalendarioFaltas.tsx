@@ -34,6 +34,7 @@ interface Props {
 export default function CalendarioFaltas({ sucursales, onVerRegistro }: Props) {
   const [mes, setMes] = useState(() => hoyAR().slice(0, 7));
   const [eventos, setEventos] = useState<EventoCalendario[]>([]);
+  const [feriados, setFeriados] = useState<Map<string, string>>(new Map());
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tiposVisibles, setTiposVisibles] = useState<Set<TipoCalendario>>(new Set(TIPOS_CAL));
@@ -44,10 +45,15 @@ export default function CalendarioFaltas({ sucursales, onVerRegistro }: Props) {
   const cargar = useCallback(async (m: string) => {
     setCargando(true);
     try {
-      const res = await fetch(`/api/rrhh/calendario?mes=${m}`);
-      if (!res.ok) throw new Error();
+      const [res, resFer] = await Promise.all([
+        fetch(`/api/rrhh/calendario?mes=${m}`),
+        fetch(`/api/feriados?desde=${m}-01&hasta=${m}-31`),
+      ]);
+      if (!res.ok || !resFer.ok) throw new Error();
       const json = (await res.json()) as { eventos: EventoCalendario[] };
+      const fer = (await resFer.json()) as { fecha: string; nombre: string }[];
       setEventos(json.eventos);
+      setFeriados(new Map(fer.map((f) => [f.fecha, f.nombre])));
       setError(null);
     } catch {
       setError("No se pudo cargar el calendario.");
@@ -181,7 +187,7 @@ export default function CalendarioFaltas({ sucursales, onVerRegistro }: Props) {
           </div>
         </div>
         <p className="text-xs text-[#B89070]">
-          Solo se muestran las faltas avisadas y las vacaciones. Las que todavía no se aprobaron dicen &quot;Pendiente&quot;; las rechazadas no aparecen.
+          Los feriados se marcan en celeste (se cargan en Configuración). Solo se muestran las faltas avisadas y las vacaciones. Las que todavía no se aprobaron dicen &quot;Pendiente&quot;; las rechazadas no aparecen.
           Los números cuentan días-persona del mes.
         </p>
       </div>
@@ -208,13 +214,21 @@ export default function CalendarioFaltas({ sucursales, onVerRegistro }: Props) {
             const esHoy = dia === hoy;
             const seleccionado = dia === diaSeleccionado;
             const finde = i % 7 >= 5;
+            const feriado = feriados.get(dia);
             return (
               <button
                 key={dia}
                 onClick={() => setDiaSeleccionado(seleccionado ? null : dia)}
                 className={`text-left border-b border-r border-[#F3EADB] min-h-[56px] sm:min-h-[104px] p-1 sm:p-1.5 flex flex-col gap-1 transition-colors ${
-                  seleccionado ? "bg-[#FDF6E3] ring-2 ring-inset ring-[#D4A843]" : finde ? "bg-[#FDFAF6] hover:bg-[#FAF3E6]" : "hover:bg-[#FAF7F2]"
+                  seleccionado
+                    ? "bg-[#FDF6E3] ring-2 ring-inset ring-[#D4A843]"
+                    : feriado
+                    ? "bg-sky-50 hover:bg-sky-100"
+                    : finde
+                    ? "bg-[#FDFAF6] hover:bg-[#FAF3E6]"
+                    : "hover:bg-[#FAF7F2]"
                 }`}
+                title={feriado ? `Feriado: ${feriado}` : undefined}
               >
                 <span
                   className={`text-xs font-semibold w-6 h-6 flex items-center justify-center rounded-full ${
@@ -223,6 +237,12 @@ export default function CalendarioFaltas({ sucursales, onVerRegistro }: Props) {
                 >
                   {Number(dia.slice(8))}
                 </span>
+                {feriado && (
+                  <span className="text-[9px] sm:text-[10px] leading-tight font-semibold text-sky-700 uppercase tracking-wide truncate w-full">
+                    <span className="sm:hidden">Feriado</span>
+                    <span className="hidden sm:inline">Feriado · {feriado}</span>
+                  </span>
+                )}
 
                 {/* Celular: puntitos por tipo */}
                 {lista.length > 0 && (
@@ -270,6 +290,11 @@ export default function CalendarioFaltas({ sucursales, onVerRegistro }: Props) {
                 month: "long",
               })}
               <span className="text-[#8B6347] font-normal"> · {eventosDia.length} {eventosDia.length === 1 ? "falta" : "faltas"}</span>
+              {feriados.get(diaSeleccionado) && (
+                <span className="block mt-1 text-xs font-medium text-sky-700">
+                  Feriado: {feriados.get(diaSeleccionado)} — quien no trabaje no tiene falta
+                </span>
+              )}
             </h3>
             <button onClick={() => setDiaSeleccionado(null)} className="text-[#B89070] hover:text-[#2C1810] text-lg leading-none" aria-label="Cerrar">
               ✕

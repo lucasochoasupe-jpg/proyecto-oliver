@@ -45,6 +45,35 @@ try { db.exec("ALTER TABLE empleados ADD COLUMN nacionalidad TEXT"); } catch {}
 try { db.exec("ALTER TABLE empleados ADD COLUMN contacto_emergencia_nombre TEXT"); } catch {}
 try { db.exec("ALTER TABLE empleados ADD COLUMN contacto_emergencia_telefono TEXT"); } catch {}
 try { db.exec("ALTER TABLE empleados ADD COLUMN cbu TEXT"); } catch {}
+
+// Convenio colectivo de cada empleado: la panadería tiene gente bajo dos
+// convenios de Rosario con aportes distintos — CCT 615/10 (panaderos) y CCT
+// 145/90 (pasteleros y confiteros: presentismo 10%, sindical 4%, colonia de
+// vacaciones 1%). Sin convenio asignado se usan los % de
+// configuracion_liquidacion. Jornada reducida (media jornada): la obra social
+// se aporta como si fuera jornada completa (Ley 26.474), lo que en el recibo
+// es un 3% más del trabajador (código 0307).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS convenios (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    codigo TEXT NOT NULL UNIQUE,
+    nombre TEXT NOT NULL,
+    presentismo_pct REAL NOT NULL DEFAULT 0,
+    aporte_sindical_pct REAL NOT NULL DEFAULT 0,
+    aporte_sepelio_pct REAL NOT NULL DEFAULT 0,
+    aporte_colonia_pct REAL NOT NULL DEFAULT 0
+  );
+  INSERT OR IGNORE INTO convenios (codigo, nombre, presentismo_pct, aporte_sindical_pct, aporte_sepelio_pct, aporte_colonia_pct)
+    VALUES ('615/10', 'Panaderos de Rosario (CCT 615/10)', 5, 3, 2, 0);
+  INSERT OR IGNORE INTO convenios (codigo, nombre, presentismo_pct, aporte_sindical_pct, aporte_sepelio_pct, aporte_colonia_pct)
+    VALUES ('145/90', 'Pasteleros y Confiteros de Rosario (CCT 145/90)', 10, 4, 0, 1);
+`);
+try { db.exec("ALTER TABLE empleados ADD COLUMN convenio_id INTEGER REFERENCES convenios(id)"); } catch {}
+try { db.exec("ALTER TABLE empleados ADD COLUMN jornada_reducida INTEGER NOT NULL DEFAULT 0"); } catch {}
+// Fecha de alta registrada (la que figura en el recibo). Puede ser posterior
+// a fecha_ingreso (cuando empezó a trabajar), que sigue siendo la base de
+// vacaciones y aguinaldo; el recibo muestra la de alta.
+try { db.exec("ALTER TABLE empleados ADD COLUMN fecha_alta TEXT"); } catch {}
 try { db.exec("ALTER TABLE settings ADD COLUMN caja_sheet_url TEXT"); } catch {}
 try { db.exec("ALTER TABLE adelantos ADD COLUMN grupo_id INTEGER"); } catch {}
 try { db.exec("ALTER TABLE adelantos ADD COLUMN cuota_numero INTEGER"); } catch {}
@@ -384,6 +413,38 @@ try { db.exec("ALTER TABLE turno_templates ADD COLUMN dias_semana TEXT"); } catc
 try { db.exec("ALTER TABLE turno_templates ADD COLUMN tolerancia_min INTEGER"); } catch {}
 try { db.exec("ALTER TABLE horarios_empleado ADD COLUMN tolerancia_min INTEGER"); } catch {}
 try { db.exec("ALTER TABLE legajo_archivos ADD COLUMN etiqueta TEXT"); } catch {}
+// Feriados: un turno pactado que cae en feriado y no se trabaja no es falta
+// (ver calcularAusencias). Se precargan los nacionales de 2026 una sola vez,
+// cuando la tabla se crea — después se editan desde Configuración (agregar
+// puentes, feriados locales, años siguientes) sin que un reinicio los pise.
+{
+  const existia = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'feriados'").get();
+  db.exec("CREATE TABLE IF NOT EXISTS feriados (fecha TEXT PRIMARY KEY, nombre TEXT NOT NULL)");
+  if (!existia) {
+    const insert = db.prepare("INSERT OR IGNORE INTO feriados (fecha, nombre) VALUES (?, ?)");
+    for (const [fecha, nombre] of [
+      ["2026-01-01", "Año Nuevo"],
+      ["2026-02-16", "Carnaval"],
+      ["2026-02-17", "Carnaval"],
+      ["2026-03-24", "Día Nacional de la Memoria por la Verdad y la Justicia"],
+      ["2026-04-02", "Día del Veterano y de los Caídos en la Guerra de Malvinas"],
+      ["2026-04-03", "Viernes Santo"],
+      ["2026-05-01", "Día del Trabajador"],
+      ["2026-05-25", "Día de la Revolución de Mayo"],
+      ["2026-06-15", "Paso a la Inmortalidad del Gral. Martín Miguel de Güemes"],
+      ["2026-06-20", "Paso a la Inmortalidad del Gral. Manuel Belgrano"],
+      ["2026-07-09", "Día de la Independencia"],
+      ["2026-08-17", "Paso a la Inmortalidad del Gral. José de San Martín"],
+      ["2026-10-12", "Día del Respeto a la Diversidad Cultural"],
+      ["2026-11-23", "Día de la Soberanía Nacional"],
+      ["2026-12-08", "Inmaculada Concepción de María"],
+      ["2026-12-25", "Navidad"],
+    ]) insert.run(fecha, nombre);
+  }
+}
+// CCT 478/06 (panaderos): además del aporte sindical, el gremio retiene un
+// "Fondo Compensador y Sepelio" como concepto aparte en el recibo.
+try { db.exec("ALTER TABLE configuracion_liquidacion ADD COLUMN aporte_sepelio_pct REAL NOT NULL DEFAULT 0"); } catch {}
 
 // Aprobación de pedidos de RRHH (ver [[decidirAusenciaReportada]]). El
 // backfill corre una sola vez — cuando la columna se crea — y deja todo lo
@@ -1435,6 +1496,9 @@ export interface Empleado {
   contacto_emergencia_nombre: string | null;
   contacto_emergencia_telefono: string | null;
   cbu: string | null;
+  convenio_id: number | null;
+  jornada_reducida: number; // 0/1
+  fecha_alta: string | null; // ISO — alta registrada, la que va en el recibo (si es null, se usa fecha_ingreso)
 }
 
 function sameWords(a: string[], b: string[]): boolean {
@@ -1555,12 +1619,15 @@ export function updateEmpleado(
     contacto_emergencia_nombre?: string | null;
     contacto_emergencia_telefono?: string | null;
     cbu?: string | null;
+    convenio_id?: number | null;
+    jornada_reducida?: number;
+    fecha_alta?: string | null;
   }
 ): void {
   const current = db.prepare("SELECT * FROM empleados WHERE id = ?").get(id) as unknown as Empleado | undefined;
   if (!current) return;
   db.prepare(
-    "UPDATE empleados SET nombre = ?, celular = ?, jid = ?, activo = ?, tipo_pago = ?, sueldo_mensual = ?, valor_hora = ?, valor_dia = ?, fecha_ingreso = ?, sueldo_estimado = ?, tipo_pago_informal = ?, sueldo_mensual_informal = ?, valor_hora_informal = ?, valor_dia_informal = ?, cuil = ?, legajo = ?, categoria_laboral = ?, banco = ?, fecha_nacimiento = ?, direccion = ?, email = ?, dni = ?, estado_civil = ?, nacionalidad = ?, contacto_emergencia_nombre = ?, contacto_emergencia_telefono = ?, cbu = ? WHERE id = ?"
+    "UPDATE empleados SET nombre = ?, celular = ?, jid = ?, activo = ?, tipo_pago = ?, sueldo_mensual = ?, valor_hora = ?, valor_dia = ?, fecha_ingreso = ?, sueldo_estimado = ?, tipo_pago_informal = ?, sueldo_mensual_informal = ?, valor_hora_informal = ?, valor_dia_informal = ?, cuil = ?, legajo = ?, categoria_laboral = ?, banco = ?, fecha_nacimiento = ?, direccion = ?, email = ?, dni = ?, estado_civil = ?, nacionalidad = ?, contacto_emergencia_nombre = ?, contacto_emergencia_telefono = ?, cbu = ?, convenio_id = ?, jornada_reducida = ?, fecha_alta = ? WHERE id = ?"
   ).run(
     patch.nombre ?? current.nombre,
     patch.celular !== undefined ? patch.celular : current.celular,
@@ -1589,6 +1656,9 @@ export function updateEmpleado(
     patch.contacto_emergencia_nombre !== undefined ? patch.contacto_emergencia_nombre : current.contacto_emergencia_nombre,
     patch.contacto_emergencia_telefono !== undefined ? patch.contacto_emergencia_telefono : current.contacto_emergencia_telefono,
     patch.cbu !== undefined ? patch.cbu : current.cbu,
+    patch.convenio_id !== undefined ? patch.convenio_id : current.convenio_id,
+    patch.jornada_reducida !== undefined ? patch.jornada_reducida : current.jornada_reducida,
+    patch.fecha_alta !== undefined ? patch.fecha_alta : current.fecha_alta,
     id
   );
 
@@ -2355,6 +2425,7 @@ export interface ConfiguracionLiquidacion {
   aporte_ley19032_pct: number;
   aporte_obra_social_pct: number;
   aporte_sindical_pct: number;
+  aporte_sepelio_pct: number;
   presentismo_pct: number;
   contrib_art_pct: number;
   contrib_jubilacion_patronal_pct: number;
@@ -2374,7 +2445,7 @@ export function updateConfiguracionLiquidacion(patch: Partial<ConfiguracionLiqui
       empresa_razon_social = ?, empresa_domicilio = ?, empresa_cuit = ?, banco_default = ?,
       obra_social_codigo = ?, obra_social_nombre = ?,
       aporte_jubilacion_pct = ?, aporte_ley19032_pct = ?, aporte_obra_social_pct = ?, aporte_sindical_pct = ?,
-      presentismo_pct = ?, contrib_art_pct = ?, contrib_jubilacion_patronal_pct = ?,
+      aporte_sepelio_pct = ?, presentismo_pct = ?, contrib_art_pct = ?, contrib_jubilacion_patronal_pct = ?,
       contrib_obra_social_patronal_pct = ?, contrib_seguro_vida_fijo = ?
     WHERE id = 1`
   ).run(
@@ -2388,12 +2459,62 @@ export function updateConfiguracionLiquidacion(patch: Partial<ConfiguracionLiqui
     next.aporte_ley19032_pct,
     next.aporte_obra_social_pct,
     next.aporte_sindical_pct,
+    next.aporte_sepelio_pct,
     next.presentismo_pct,
     next.contrib_art_pct,
     next.contrib_jubilacion_patronal_pct,
     next.contrib_obra_social_patronal_pct,
     next.contrib_seguro_vida_fijo
   );
+}
+
+// ── Convenios colectivos ─────────────────────────────────────────────────
+
+export interface Convenio {
+  id: number;
+  codigo: string;
+  nombre: string;
+  presentismo_pct: number;
+  aporte_sindical_pct: number;
+  aporte_sepelio_pct: number;
+  aporte_colonia_pct: number;
+}
+
+export function listConvenios(): Convenio[] {
+  return db.prepare("SELECT * FROM convenios ORDER BY codigo DESC").all() as unknown as Convenio[];
+}
+
+export function updateConvenio(id: number, patch: Partial<Omit<Convenio, "id" | "codigo">>): void {
+  const current = db.prepare("SELECT * FROM convenios WHERE id = ?").get(id) as unknown as Convenio | undefined;
+  if (!current) return;
+  const next = { ...current, ...patch };
+  db.prepare(
+    "UPDATE convenios SET nombre = ?, presentismo_pct = ?, aporte_sindical_pct = ?, aporte_sepelio_pct = ?, aporte_colonia_pct = ? WHERE id = ?"
+  ).run(next.nombre, next.presentismo_pct, next.aporte_sindical_pct, next.aporte_sepelio_pct, next.aporte_colonia_pct, id);
+}
+
+// ── Feriados ─────────────────────────────────────────────────────────────
+
+export interface Feriado {
+  fecha: string; // YYYY-MM-DD
+  nombre: string;
+}
+
+export function listFeriados(filters?: { desde?: string; hasta?: string }): Feriado[] {
+  return db
+    .prepare("SELECT fecha, nombre FROM feriados WHERE fecha >= ? AND fecha <= ? ORDER BY fecha")
+    .all(filters?.desde ?? "0000-01-01", filters?.hasta ?? "9999-12-31") as unknown as Feriado[];
+}
+
+export function upsertFeriado(fecha: string, nombre: string): void {
+  db.prepare("INSERT INTO feriados (fecha, nombre) VALUES (?, ?) ON CONFLICT(fecha) DO UPDATE SET nombre = excluded.nombre").run(
+    fecha,
+    nombre
+  );
+}
+
+export function deleteFeriado(fecha: string): void {
+  db.prepare("DELETE FROM feriados WHERE fecha = ?").run(fecha);
 }
 
 // ── Cumplimiento de horarios ─────────────────────────────────────────────────
@@ -2643,6 +2764,10 @@ export interface AusenciaRow {
   // Justificada por un Motivo Personal aprobado SIN goce de sueldo: no cuenta
   // como falta sin aviso (no hace perder presentismo) pero se descuenta.
   sin_goce: boolean;
+  // Nombre del feriado si el turno cae en uno. Un feriado no trabajado nunca
+  // es falta: viene con justificada = true y sin_goce = false (gana sobre
+  // cualquier pedido de RRHH superpuesto) y no se descuenta.
+  feriado: string | null;
 }
 
 export function calcularAusencias(filters: { desde: string; hasta: string; nombres?: string[] }): AusenciaRow[] {
@@ -2699,6 +2824,13 @@ export function calcularAusencias(filters: { desde: string; hasta: string; nombr
     return { justificada: true, sin_goce: rangos.every((r) => r.sin_goce) };
   }
 
+  const feriados = new Map(listFeriados(filters).map((f) => [f.fecha, f.nombre]));
+  function estado(empleadoNombre: string, fecha: string): { justificada: boolean; sin_goce: boolean; feriado: string | null } {
+    const feriado = feriados.get(fecha) ?? null;
+    if (feriado) return { justificada: true, sin_goce: false, feriado };
+    return { ...justificacion(empleadoNombre, fecha), feriado: null };
+  }
+
   // No contar como ausencia un turno de HOY que todavía no arrancó — si no,
   // liquidación mal marca "faltó" a alguien cuyo turno es más tarde en el día.
   const ahoraSec = Math.floor(Date.now() / 1000);
@@ -2721,7 +2853,7 @@ export function calcularAusencias(filters: { desde: string; hasta: string; nombr
         hora_inicio: h.hora_inicio,
         hora_fin: h.hora_fin,
         horas: duracionHorarioHoras(h.hora_inicio, h.hora_fin),
-        ...justificacion(h.empleado_nombre, fecha),
+        ...estado(h.empleado_nombre, fecha),
       });
     }
   }
@@ -2738,7 +2870,7 @@ export function calcularAusencias(filters: { desde: string; hasta: string; nombr
       hora_inicio: p.hora_inicio,
       hora_fin: p.hora_fin,
       horas: duracionHorarioHoras(p.hora_inicio, p.hora_fin),
-      ...justificacion(p.empleado_nombre, p.fecha),
+      ...estado(p.empleado_nombre, p.fecha),
     });
   }
 
@@ -2780,12 +2912,14 @@ interface ParteLiquidacion {
   dias_justificados_pagos: number; // solo tipo 'dia': faltas con goce que se pagan igual (horas del turno × valor hora)
   horas_justificadas_pagas: number; // horas de turno de esos días
   monto_ausencia_justificada: number; // horas_justificadas_pagas × valor_hora
+  dias_feriado: number; // turnos pactados en feriado no trabajados (no se descuentan; en 'dia' se pagan como falta con goce)
   dias_trabajados: number | null; // solo tipo 'dia', con horario cargado
-  horas_extra: number | null; // solo tipo 'dia', con horario cargado: horas por encima de lo pactado ese día
   total_por_horas: number | null; // horas_trabajadas × valor_hora — referencia para comparar contra 'total' (mensual y dia)
   bruto: number; // total de esta parte, antes de descontar adelantos
 }
 
+// total = bruto de la parte informal (sin horas extra ni adelantos — el
+// neto informal a cobrar está en LiquidacionEmpleado.total_informal).
 export type ParteLiquidacionInformal = Omit<ParteLiquidacion, "bruto"> & { total: number };
 
 function sinBruto({ bruto: _bruto, ...resto }: ParteLiquidacion): Omit<ParteLiquidacion, "bruto"> {
@@ -2805,6 +2939,9 @@ export interface AportesLegales {
   aporte_ley19032: number;
   aporte_obra_social: number;
   aporte_sindical: number;
+  aporte_sepelio: number;
+  aporte_colonia: number; // CCT 145/90: colonia de vacaciones
+  aporte_os_jornada_reducida: number; // obra social adicional por media jornada (código 0307)
   total_aportes_empleado: number;
   costo_art: number;
   costo_jubilacion_patronal: number;
@@ -2814,7 +2951,30 @@ export interface AportesLegales {
   costo_total_empleador: number; // sueldo_bruto + costo_empleador_total
 }
 
-function calcularAportesLegales(parte: ParteLiquidacion, config: ConfiguracionLiquidacion): AportesLegales {
+// Configuración de aportes de UN empleado: la general de la empresa con los
+// % de su convenio encima (presentismo, sindical, sepelio, colonia) y su
+// marca de jornada reducida.
+export type ConfigAportesEmpleado = ConfiguracionLiquidacion & { aporte_colonia_pct: number; jornada_reducida: boolean };
+
+function configAportesEmpleado(
+  config: ConfiguracionLiquidacion,
+  emp: Pick<Empleado, "convenio_id" | "jornada_reducida">,
+  convenios: Map<number, Convenio>
+): ConfigAportesEmpleado {
+  const convenio = emp.convenio_id !== null ? convenios.get(emp.convenio_id) : undefined;
+  return {
+    ...config,
+    ...(convenio && {
+      presentismo_pct: convenio.presentismo_pct,
+      aporte_sindical_pct: convenio.aporte_sindical_pct,
+      aporte_sepelio_pct: convenio.aporte_sepelio_pct,
+    }),
+    aporte_colonia_pct: convenio?.aporte_colonia_pct ?? 0,
+    jornada_reducida: emp.jornada_reducida === 1,
+  };
+}
+
+function calcularAportesLegales(parte: ParteLiquidacion, config: ConfigAportesEmpleado): AportesLegales {
   // Presentismo: solo tiene sentido para "mensual" — "hora" ya paga
   // estrictamente lo trabajado (no hay noción de ausencia que perdonar o
   // castigar aparte) y "día" ya refleja la falta al no pagar jornal ese día.
@@ -2828,7 +2988,11 @@ function calcularAportesLegales(parte: ParteLiquidacion, config: ConfiguracionLi
   const aporteLey19032 = sueldoBruto * (config.aporte_ley19032_pct / 100);
   const aporteObraSocial = sueldoBruto * (config.aporte_obra_social_pct / 100);
   const aporteSindical = sueldoBruto * (config.aporte_sindical_pct / 100);
-  const totalAportesEmpleado = aporteJubilacion + aporteLey19032 + aporteObraSocial + aporteSindical;
+  const aporteSepelio = sueldoBruto * (config.aporte_sepelio_pct / 100);
+  const aporteColonia = sueldoBruto * (config.aporte_colonia_pct / 100);
+  const aporteOsJornadaReducida = config.jornada_reducida ? aporteObraSocial : 0;
+  const totalAportesEmpleado =
+    aporteJubilacion + aporteLey19032 + aporteObraSocial + aporteSindical + aporteSepelio + aporteColonia + aporteOsJornadaReducida;
 
   const costoArt = sueldoBruto * (config.contrib_art_pct / 100);
   const costoJubilacionPatronal = sueldoBruto * (config.contrib_jubilacion_patronal_pct / 100);
@@ -2843,6 +3007,9 @@ function calcularAportesLegales(parte: ParteLiquidacion, config: ConfiguracionLi
     aporte_ley19032: aporteLey19032,
     aporte_obra_social: aporteObraSocial,
     aporte_sindical: aporteSindical,
+    aporte_sepelio: aporteSepelio,
+    aporte_colonia: aporteColonia,
+    aporte_os_jornada_reducida: aporteOsJornadaReducida,
     total_aportes_empleado: totalAportesEmpleado,
     costo_art: costoArt,
     costo_jubilacion_patronal: costoJubilacionPatronal,
@@ -2877,8 +3044,8 @@ export interface LiquidacionEmpleado {
   dias_justificados_pagos: number; // solo tipo 'dia': faltas con goce que se pagan igual (horas del turno × valor hora)
   horas_justificadas_pagas: number; // horas de turno de esos días
   monto_ausencia_justificada: number; // horas_justificadas_pagas × valor_hora
+  dias_feriado: number; // turnos pactados en feriado no trabajados (no se descuentan; en 'dia' se pagan como falta con goce)
   dias_trabajados: number | null; // solo tipo 'dia', con horario cargado
-  horas_extra: number | null; // solo tipo 'dia', con horario cargado: horas por encima de lo pactado ese día
   total_por_horas: number | null; // horas_trabajadas × valor_hora — referencia para comparar contra 'total' (mensual y dia)
   adelantos: number; // suma de adelantos cargados con fecha dentro del período
   legal: AportesLegales | null; // presentismo + aportes/contribuciones legales de la parte blanca, null si no tiene tipo_pago
@@ -2886,7 +3053,9 @@ export interface LiquidacionEmpleado {
   adelantos_blanco: number; // parte de `adelantos` que no entró en la informal (o todo, si no tiene) y se descontó de la blanca
   adelantos_informal: number; // parte de `adelantos` descontada de la informal (prioridad, hasta agotarla)
   informal: ParteLiquidacionInformal | null; // parte "informal", independiente, null si el empleado no tiene
-  total: number; // total_blanco + informal.total (o solo total_blanco si no hay parte informal)
+  horas_extra: HorasExtra; // se pagan en negro, sumadas a lo informal (aunque no tenga parte informal)
+  total_informal: number; // informal.total + horas_extra.monto - adelantos_informal
+  total: number; // total_blanco + total_informal
   advertencias: string[];
 }
 
@@ -2942,6 +3111,62 @@ interface ParteContexto {
   ocurrencias: (dia: number) => number;
 }
 
+function horasTrabajadasPorFecha(turnos: Turno[]): Map<string, number> {
+  const porFecha = new Map<string, number>();
+  for (const t of turnos) {
+    if (t.horas === null) continue;
+    const fecha = fechaAR(t.entrada_at);
+    porFecha.set(fecha, (porFecha.get(fecha) ?? 0) + t.horas);
+  }
+  return porFecha;
+}
+
+// Horas de turno pactadas para una fecha: un turno puntual en esa fecha
+// exacta (ej. "domingo por medio") pisa el patrón semanal de ese día.
+function horasPactadasEnFecha(ctx: Pick<ParteContexto, "horariosEmp" | "puntualesEmp">, fecha: string): number {
+  const puntuales = ctx.puntualesEmp.filter((p) => p.fecha === fecha);
+  if (puntuales.length > 0) return puntuales.reduce((acc, p) => acc + duracionHorarioHoras(p.hora_inicio, p.hora_fin), 0);
+  const diaSemana = new Date(`${fecha}T00:00:00Z`).getUTCDay();
+  return ctx.horariosEmp
+    .filter((h) => h.dia_semana === diaSemana)
+    .reduce((acc, h) => acc + duracionHorarioHoras(h.hora_inicio, h.hora_fin), 0);
+}
+
+// Horas extra del empleado: lo fichado por encima del turno pactado cada día
+// (un día sin turno pactado cuenta entero). Se calculan una sola vez por
+// empleado — no por parte — y se pagan SIEMPRE en negro (sumadas a lo
+// informal) a valor hora simple, nunca en el recibo. Solo para "mensual" y
+// "dia" con horario cargado: "hora" ya cobra todo lo fichado, y sin horario
+// no hay contra qué comparar.
+export interface HorasExtra {
+  horas: number;
+  valor_hora: number | null; // valor_hora blanco + informal; si no hay ninguno, el equivalente mensual
+  monto: number;
+}
+
+function calcularHorasExtra(
+  emp: Pick<Empleado, "tipo_pago" | "tipo_pago_informal" | "valor_hora" | "valor_hora_informal">,
+  ctx: ParteContexto,
+  valorHoraEquivalente: number | null,
+  advertencias: string[]
+): HorasExtra {
+  const tipo = emp.tipo_pago ?? emp.tipo_pago_informal;
+  if ((tipo !== "mensual" && tipo !== "dia") || (ctx.horariosEmp.length === 0 && ctx.puntualesEmp.length === 0)) {
+    return { horas: 0, valor_hora: null, monto: 0 };
+  }
+  let horas = 0;
+  for (const [fecha, horasDia] of horasTrabajadasPorFecha(ctx.turnosEmp)) {
+    horas += Math.max(0, horasDia - horasPactadasEnFecha(ctx, fecha));
+  }
+  // Solo suma el valor hora de las partes que el empleado tiene configuradas
+  // (puede quedar un valor_hora_informal viejo en la ficha sin parte informal).
+  const valorHoraFicha =
+    (emp.tipo_pago !== null ? emp.valor_hora ?? 0 : 0) + (emp.tipo_pago_informal !== null ? emp.valor_hora_informal ?? 0 : 0);
+  const valorHora = valorHoraFicha > 0 ? valorHoraFicha : valorHoraEquivalente;
+  if (horas > 0 && !valorHora) advertencias.push("Tiene horas extra pero no hay valor hora para pagarlas");
+  return { horas, valor_hora: valorHora, monto: horas * (valorHora ?? 0) };
+}
+
 // Calcula el desglose de UNA parte del sueldo (blanca o informal) con su propio
 // tipo de pago y valores, pero compartiendo los mismos datos de asistencia
 // (turnos/horarios/cumplimiento/ausencias) que la otra parte del mismo
@@ -2976,8 +3201,8 @@ function calcularParte(valores: ParteValores, ctx: ParteContexto, advertencias: 
       dias_justificados_pagos: 0,
       horas_justificadas_pagas: 0,
       monto_ausencia_justificada: 0,
+      dias_feriado: 0,
       dias_trabajados: null,
-      horas_extra: null,
       total_por_horas: horasTrabajadas * (valores.valor_hora ?? 0),
       bruto: horasTrabajadas * (valores.valor_hora ?? 0),
     };
@@ -3017,67 +3242,37 @@ function calcularParte(valores: ParteValores, ctx: ParteContexto, advertencias: 
         dias_justificados_pagos: 0,
         horas_justificadas_pagas: 0,
         monto_ausencia_justificada: 0,
+        dias_feriado: 0,
         dias_trabajados: null,
-        horas_extra: null,
         total_por_horas: horasTrabajadasTotal * (valores.valor_hora ?? 0),
         bruto: horasTrabajadasTotal * (valores.valor_hora ?? 0),
       };
     }
 
-    // Con horario cargado: por cada día efectivamente trabajado que coincide
-    // con un día de semana pactado, un jornal (valor_dia) + lo que exceda las
-    // horas pactadas ESE día, a valor hora (sin recargo). Un día trabajado que
-    // no coincide con ningún día de semana pactado (ej. cubrió un turno
-    // suelto) se paga directo por hora, sin jornal.
-    const horasPactadasPorDiaSemana = new Map<number, number>();
-    for (const h of horariosEmp) {
-      horasPactadasPorDiaSemana.set(
-        h.dia_semana,
-        (horasPactadasPorDiaSemana.get(h.dia_semana) ?? 0) + duracionHorarioHoras(h.hora_inicio, h.hora_fin)
-      );
-    }
-    // Turno puntual en una fecha exacta (ej. "domingo por medio") pisa el
-    // día de semana para ESA fecha — se paga jornal completo igual que un
-    // día del patrón semanal, no directo por hora.
-    const horasPactadasPorFechaPuntual = new Map<string, number>();
-    for (const p of puntualesEmp) {
-      horasPactadasPorFechaPuntual.set(
-        p.fecha,
-        (horasPactadasPorFechaPuntual.get(p.fecha) ?? 0) + duracionHorarioHoras(p.hora_inicio, p.hora_fin)
-      );
-    }
-
-    const horasPorFecha = new Map<string, number>();
-    for (const t of turnosCerrados) {
-      const fecha = fechaAR(t.entrada_at);
-      horasPorFecha.set(fecha, (horasPorFecha.get(fecha) ?? 0) + (t.horas ?? 0));
-    }
-
+    // Con horario cargado: un jornal (valor_dia) por cada día trabajado que
+    // tenía turno pactado. Lo que se trabaje por encima de lo pactado (incluido
+    // un día sin turno) son horas extra, que se pagan aparte y siempre en
+    // negro — ver calcularHorasExtra.
+    const horasPorFecha = horasTrabajadasPorFecha(turnosCerrados);
     let diasTrabajados = 0;
-    let horasExtra = 0;
     let total = 0;
-    for (const [fecha, horasDia] of horasPorFecha) {
-      const diaSemana = new Date(`${fecha}T00:00:00Z`).getUTCDay();
-      const horasPactadasDia = horasPactadasPorFechaPuntual.get(fecha) ?? horasPactadasPorDiaSemana.get(diaSemana) ?? 0;
-      if (horasPactadasDia > 0) {
+    for (const fecha of horasPorFecha.keys()) {
+      if (horasPactadasEnFecha(ctx, fecha) > 0) {
         diasTrabajados += 1;
-        const extra = Math.max(0, horasDia - horasPactadasDia);
-        horasExtra += extra;
-        total += (valores.valor_dia ?? 0) + extra * (valores.valor_hora ?? 0);
-      } else {
-        total += horasDia * (valores.valor_hora ?? 0);
+        total += valores.valor_dia ?? 0;
       }
     }
 
     const ausenciasInjustificadas = ausenciasEmp.filter((a) => !a.justificada);
-    const ausenciasJustificadas = ausenciasEmp.filter((a) => a.justificada && !a.sin_goce);
+    const ausenciasFeriado = ausenciasEmp.filter((a) => a.feriado !== null);
+    const ausenciasJustificadas = ausenciasEmp.filter((a) => a.justificada && !a.sin_goce && a.feriado === null);
     const ausenciasSinGoce = ausenciasEmp.filter((a) => a.sin_goce);
 
     // Turnos pactados que faltó con un pedido aprobado CON goce (vacaciones,
-    // enfermedad, motivo personal con goce): se pagan las horas del turno ×
-    // valor hora. Si ese día ya cobró jornal por haber cubierto otro turno
-    // (turno partido), no se paga dos veces.
-    const justificadasPagas = ausenciasJustificadas.filter((a) => !horasPorFecha.has(a.fecha));
+    // enfermedad, motivo personal con goce) o que cayeron en feriado: se
+    // pagan las horas del turno × valor hora. Si ese día ya cobró jornal por
+    // haber cubierto otro turno (turno partido), no se paga dos veces.
+    const justificadasPagas = [...ausenciasJustificadas, ...ausenciasFeriado].filter((a) => !horasPorFecha.has(a.fecha));
     const diasJustificadosPagos = diasUnicos(justificadasPagas);
     const horasJustificadasPagas = justificadasPagas.reduce((acc, a) => acc + a.horas, 0);
     const montoAusenciaJustificada = horasJustificadasPagas * (valores.valor_hora ?? 0);
@@ -3107,8 +3302,8 @@ function calcularParte(valores: ParteValores, ctx: ParteContexto, advertencias: 
       dias_justificados_pagos: diasJustificadosPagos,
       horas_justificadas_pagas: horasJustificadasPagas,
       monto_ausencia_justificada: montoAusenciaJustificada,
+      dias_feriado: diasUnicos(ausenciasFeriado),
       dias_trabajados: diasTrabajados,
-      horas_extra: horasExtra,
       total_por_horas: totalPorHoras,
       bruto: total,
     };
@@ -3128,7 +3323,8 @@ function calcularParte(valores: ParteValores, ctx: ParteContexto, advertencias: 
     const descuentoTardanza = valorHoraEquivalente ? (minutosPerdidos / 60) * valorHoraEquivalente : 0;
 
     const ausenciasInjustificadas = ausenciasEmp.filter((a) => !a.justificada);
-    const ausenciasJustificadas = ausenciasEmp.filter((a) => a.justificada && !a.sin_goce);
+    const ausenciasFeriado = ausenciasEmp.filter((a) => a.feriado !== null);
+    const ausenciasJustificadas = ausenciasEmp.filter((a) => a.justificada && !a.sin_goce && a.feriado === null);
     const ausenciasSinGoce = ausenciasEmp.filter((a) => a.sin_goce);
     const horasAusencia = ausenciasInjustificadas.reduce((acc, a) => acc + a.horas, 0);
     const horasAusenciaJustificada = ausenciasJustificadas.reduce((acc, a) => acc + a.horas, 0);
@@ -3168,8 +3364,8 @@ function calcularParte(valores: ParteValores, ctx: ParteContexto, advertencias: 
       dias_justificados_pagos: 0,
       horas_justificadas_pagas: 0,
       monto_ausencia_justificada: 0,
+      dias_feriado: diasUnicos(ausenciasFeriado),
       dias_trabajados: null,
-      horas_extra: null,
       total_por_horas: totalPorHoras,
       bruto: total,
     };
@@ -3198,8 +3394,8 @@ function calcularParte(valores: ParteValores, ctx: ParteContexto, advertencias: 
     dias_justificados_pagos: 0,
     horas_justificadas_pagas: 0,
     monto_ausencia_justificada: 0,
+    dias_feriado: 0,
     dias_trabajados: null,
-    horas_extra: null,
     total_por_horas: null,
     bruto: 0,
   };
@@ -3210,6 +3406,7 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
     (e) => e.activo && (!filters.nombres || filters.nombres.length === 0 || filters.nombres.includes(e.nombre))
   );
   const configLegal = getConfiguracionLiquidacion();
+  const convenios = new Map(listConvenios().map((c) => [c.id, c]));
   const turnos = calcularHorasTrabajadas(filters);
   const cumplimiento = calcularCumplimiento(filters);
   const ausencias = calcularAusencias(filters);
@@ -3278,16 +3475,20 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
     // Aportes/contribuciones legales (jubilación, ley 19032, obra social,
     // sindical, presentismo, costo empleador) solo aplican a la parte blanca
     // — la informal no está registrada, no tiene aportes.
-    const legal = emp.tipo_pago !== null ? calcularAportesLegales(parteBlanco, configLegal) : null;
+    const legal = emp.tipo_pago !== null ? calcularAportesLegales(parteBlanco, configAportesEmpleado(configLegal, emp, convenios)) : null;
+
+    const valorHoraEquivalente =
+      [parteBlanco, parteInformal].reduce((acc, p) => acc + (p?.tipo_pago === "mensual" ? p.valor_hora_equivalente ?? 0 : 0), 0) || null;
+    const horasExtra = calcularHorasExtra(emp, ctx, valorHoraEquivalente, advertencias);
     const netoBlanco = legal ? legal.sueldo_bruto - legal.total_aportes_empleado : parteBlanco.bruto;
 
     // Los adelantos son un solo pozo (no hay "adelanto blanco/informal" al
-    // cargarlo) pero se descuentan primero de la parte informal si el
-    // empleado tiene una — y solo el excedente, si lo hay, de la parte
-    // blanca. Si no tiene parte informal, se descuentan directo de la blanca.
-    const adelantosSobreInformal = parteInformal ? Math.min(adelantos, parteInformal.bruto) : 0;
+    // cargarlo) pero se descuentan primero de lo informal (parte informal +
+    // horas extra) — y solo el excedente, si lo hay, de la parte blanca.
+    const brutoInformal = (parteInformal?.bruto ?? 0) + horasExtra.monto;
+    const adelantosSobreInformal = Math.min(adelantos, brutoInformal);
     const adelantosSobreBlanco = adelantos - adelantosSobreInformal;
-    const totalInformal = parteInformal ? parteInformal.bruto - adelantosSobreInformal : null;
+    const totalInformal = brutoInformal - adelantosSobreInformal;
     const totalBlanco = Math.max(0, netoBlanco - adelantosSobreBlanco);
     if (adelantosSobreBlanco > netoBlanco) advertencias.push("Los adelantos superan el total a pagar");
 
@@ -3300,8 +3501,10 @@ export function calcularLiquidacion(filters: { desde: string; hasta: string; nom
       total_blanco: totalBlanco,
       adelantos_blanco: adelantosSobreBlanco,
       adelantos_informal: adelantosSobreInformal,
-      informal: parteInformal ? { ...sinBruto(parteInformal), total: totalInformal! } : null,
-      total: totalBlanco + (totalInformal ?? 0),
+      informal: parteInformal ? { ...sinBruto(parteInformal), total: parteInformal.bruto } : null,
+      horas_extra: horasExtra,
+      total_informal: totalInformal,
+      total: totalBlanco + totalInformal,
       advertencias,
     };
   });
@@ -3383,7 +3586,7 @@ export interface AguinaldoEmpleado {
 // compiten por "mejor remuneración") y sin el seguro de vida fijo (es una
 // prima mensual por empleado, no por evento de pago) — se le resta del costo
 // empleador de esta parte.
-function calcularAportesLegalesAguinaldo(bruto: number, config: ConfiguracionLiquidacion): AportesLegales {
+function calcularAportesLegalesAguinaldo(bruto: number, config: ConfigAportesEmpleado): AportesLegales {
   const base = calcularAportesLegales(
     {
       tipo_pago: "dia", // cualquier tipo != "mensual" alcanza para que no aplique presentismo
@@ -3407,8 +3610,8 @@ function calcularAportesLegalesAguinaldo(bruto: number, config: ConfiguracionLiq
       dias_justificados_pagos: 0,
       horas_justificadas_pagas: 0,
       monto_ausencia_justificada: 0,
+      dias_feriado: 0,
       dias_trabajados: null,
-      horas_extra: null,
       total_por_horas: null,
       bruto,
     },
@@ -3427,14 +3630,14 @@ export function calcularAguinaldo(semestre: Semestre, nombres?: string[]): Aguin
     (e) => e.activo && (!nombres || nombres.length === 0 || nombres.includes(e.nombre))
   );
   const configLegal = getConfiguracionLiquidacion();
+  const convenios = new Map(listConvenios().map((c) => [c.id, c]));
   const hoy = fechaAR(Math.floor(Date.now() / 1000));
   const mesesDelSemestre = semestre.numero === 1 ? [1, 2, 3, 4, 5, 6] : [7, 8, 9, 10, 11, 12];
 
   // Liquidación completa de cada mes YA transcurrido del semestre, una sola
   // vez para todos los empleados — de ahí sacamos, por empleado, el sueldo
   // bruto blanco (ya incluye presentismo si correspondía ese mes) y
-  // reconstruimos el bruto informal (su `total` ya viene neto de adelantos de
-  // ese mes, así que le sumamos de vuelta lo que se le haya descontado).
+  // el bruto informal (`informal.total`, antes de adelantos y sin horas extra).
   const porMes = mesesDelSemestre
     .map((mes) => ({ anio: semestre.anio, mes, rango: rangoMes(semestre.anio, mes) }))
     .filter(({ rango }) => rango.desde <= hoy)
@@ -3466,7 +3669,7 @@ export function calcularAguinaldo(semestre: Semestre, nombres?: string[]): Aguin
       }
       if (fila.informal) {
         huboDatosInformal = true;
-        const brutoInformalMes = fila.informal.total + fila.adelantos_informal;
+        const brutoInformalMes = fila.informal.total;
         if (brutoInformalMes > mejorInformal) mejorInformal = brutoInformalMes;
       }
     }
@@ -3483,7 +3686,7 @@ export function calcularAguinaldo(semestre: Semestre, nombres?: string[]): Aguin
     const aguinaldoBlanco = blanco ? (blanco.mejor_remuneracion / 12) * blanco.meses_computados : 0;
     const aguinaldoInformal = informal ? (informal.mejor_remuneracion / 12) * informal.meses_computados : 0;
 
-    const legal = blanco && aguinaldoBlanco > 0 ? calcularAportesLegalesAguinaldo(aguinaldoBlanco, configLegal) : null;
+    const legal = blanco && aguinaldoBlanco > 0 ? calcularAportesLegalesAguinaldo(aguinaldoBlanco, configAportesEmpleado(configLegal, emp, convenios)) : null;
     const netoBlanco = legal ? aguinaldoBlanco - legal.total_aportes_empleado : aguinaldoBlanco;
 
     if (mesesComputados === 0 && (huboDatosBlanco || huboDatosInformal)) {

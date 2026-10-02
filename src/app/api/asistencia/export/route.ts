@@ -128,7 +128,7 @@ export async function GET(req: NextRequest) {
       salidaEsperada: a.hora_fin,
       diffSalida: null,
       horas: a.horas,
-      estado: a.justificada ? "Ausencia justificada" : "Ausencia injustificada",
+      estado: a.feriado ? `Feriado (${a.feriado})` : a.justificada ? "Ausencia justificada" : "Ausencia injustificada",
       color: a.justificada ? COLOR.justificada : COLOR.injustificada,
     });
   }

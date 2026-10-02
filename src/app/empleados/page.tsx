@@ -30,6 +30,9 @@ interface Empleado {
   dni: string | null;
   estado_civil: string | null;
   nacionalidad: string | null;
+  convenio_id: number | null;
+  jornada_reducida: number;
+  fecha_alta: string | null;
   contacto_emergencia_nombre: string | null;
   contacto_emergencia_telefono: string | null;
   cbu: string | null;
@@ -139,11 +142,15 @@ export default function EmpleadosPage() {
         contacto_emergencia_nombre: string;
         contacto_emergencia_telefono: string;
         cbu: string;
+        convenio_id: string;
+        jornada_reducida: boolean;
+        fecha_alta: string;
       }
     >
   >({});
   const [guardando, setGuardando] = useState<number | null>(null);
   const [guardado, setGuardado] = useState<number | null>(null);
+  const [convenios, setConvenios] = useState<{ id: number; codigo: string; nombre: string }[]>([]);
 
   // Nuevo empleado
   const [mostrarForm, setMostrarForm] = useState(false);
@@ -160,9 +167,14 @@ export default function EmpleadosPage() {
   const [deleting, setDeleting] = useState(false);
 
   const fetchData = useCallback(async () => {
-    const [res, resSaldos] = await Promise.all([fetch("/api/empleados"), fetch("/api/vacaciones")]);
+    const [res, resSaldos, resConvenios] = await Promise.all([
+      fetch("/api/empleados"),
+      fetch("/api/vacaciones"),
+      fetch("/api/convenios"),
+    ]);
     const data = (await res.json()) as Empleado[];
     const saldosData = (await resSaldos.json()) as SaldoVacaciones[];
+    setConvenios((await resConvenios.json()) as { id: number; codigo: string; nombre: string }[]);
     setEmpleados(data);
     setSaldos(Object.fromEntries(saldosData.map((s) => [s.empleado_id, s])));
     setLoading(false);
@@ -207,6 +219,9 @@ export default function EmpleadosPage() {
         contacto_emergencia_nombre: e.contacto_emergencia_nombre ?? "",
         contacto_emergencia_telefono: e.contacto_emergencia_telefono ?? "",
         cbu: e.cbu ?? "",
+        convenio_id: e.convenio_id !== null ? String(e.convenio_id) : "",
+        jornada_reducida: e.jornada_reducida === 1,
+        fecha_alta: e.fecha_alta ?? "",
       },
     }));
   }
@@ -250,6 +265,9 @@ export default function EmpleadosPage() {
         contacto_emergencia_nombre: e.contacto_emergencia_nombre.trim() || null,
         contacto_emergencia_telefono: e.contacto_emergencia_telefono.trim() || null,
         cbu: e.cbu.trim() || null,
+        convenio_id: e.convenio_id ? Number(e.convenio_id) : null,
+        jornada_reducida: e.jornada_reducida ? 1 : 0,
+        fecha_alta: e.fecha_alta.trim() || null,
       }),
     });
     await fetchData();
@@ -320,6 +338,9 @@ export default function EmpleadosPage() {
       contacto_emergencia_nombre: null,
       contacto_emergencia_telefono: null,
       cbu: null,
+      convenio_id: null,
+      jornada_reducida: 0,
+      fecha_alta: null,
     };
     setNuevoApellido("");
     setNuevoNombrePila("");
@@ -780,6 +801,14 @@ export default function EmpleadosPage() {
                         className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
                       />
                     </Campo>
+                    <Campo label="Fecha de alta (recibo)">
+                      <input
+                        type="date"
+                        value={ed.fecha_alta}
+                        onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], fecha_alta: e.target.value } }))}
+                        className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
+                      />
+                    </Campo>
                   </div>
                   {emp.jid && (
                     <div className="flex items-center gap-2 mt-2">
@@ -1091,6 +1120,33 @@ export default function EmpleadosPage() {
                         onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], banco: e.target.value } }))}
                         className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
                       />
+                    </Campo>
+                    <Campo label="Convenio colectivo">
+                      <select
+                        value={ed.convenio_id}
+                        onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], convenio_id: e.target.value } }))}
+                        className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] bg-white"
+                      >
+                        <option value="">Sin asignar</option>
+                        {convenios.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.nombre}
+                          </option>
+                        ))}
+                      </select>
+                    </Campo>
+                    <Campo label="Jornada">
+                      <label className="flex items-center gap-2 text-sm text-[#2C1810] py-1.5">
+                        <input
+                          type="checkbox"
+                          checked={ed.jornada_reducida}
+                          onChange={(e) =>
+                            setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], jornada_reducida: e.target.checked } }))
+                          }
+                          className="h-4 w-4 rounded border-[#D4A843] text-[#2C1810] focus:ring-[#D4A843]"
+                        />
+                        Jornada reducida (+3% obra social)
+                      </label>
                     </Campo>
                     <Campo label="CBU" className="col-span-2">
                       <input
