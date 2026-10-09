@@ -39,6 +39,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     fraccion_jornada?: number;
     modo_informal?: "adicional" | "complemento";
     modo_horas_extra?: "informal" | "recibo" | "a_definir";
+    recargo_feriado_pct?: number;
+    aporte_sindical_pct?: number | null;
+    aporte_sepelio_pct?: number | null;
+    aporte_colonia_pct?: number | null;
   };
   updateEmpleado(Number(id), body);
   return NextResponse.json({ ok: true });

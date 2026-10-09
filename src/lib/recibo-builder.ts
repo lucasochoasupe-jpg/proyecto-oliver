@@ -78,7 +78,8 @@ export function construirComprobanteInformal(
   // Sin parte informal igual hay comprobante si tiene horas extra (se pagan
   // siempre en negro).
   const extrasInformal = fila.horas_extra.destino === "informal" ? fila.horas_extra : null;
-  if (!fila.informal && !extrasInformal?.monto) return null;
+  const feriado = fila.feriado_trabajado;
+  if (!fila.informal && !extrasInformal?.monto && !feriado.monto) return null;
   const p = fila.informal;
 
   const sueldoONormal = !p
@@ -103,6 +104,9 @@ export function construirComprobanteInformal(
     horas_extra: extrasInformal?.horas ?? 0,
     horas_extra_valor_hora: extrasInformal?.valor_hora ?? null,
     horas_extra_monto: extrasInformal?.monto ?? 0,
+    feriado_horas: feriado.horas,
+    feriado_recargo_pct: feriado.recargo_pct,
+    feriado_monto: feriado.monto,
     adelantos: fila.adelantos_informal,
     total: fila.total_informal,
   };

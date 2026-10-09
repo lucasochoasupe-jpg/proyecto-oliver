@@ -37,6 +37,10 @@ interface Empleado {
   fraccion_jornada: number;
   modo_informal: "adicional" | "complemento";
   modo_horas_extra: "informal" | "recibo" | "a_definir";
+  recargo_feriado_pct: number;
+  aporte_sindical_pct: number | null;
+  aporte_sepelio_pct: number | null;
+  aporte_colonia_pct: number | null;
   contacto_emergencia_nombre: string | null;
   contacto_emergencia_telefono: string | null;
   cbu: string | null;
@@ -153,6 +157,10 @@ export default function EmpleadosPage() {
         fraccion_jornada_pct: string;
         modo_informal: "adicional" | "complemento";
         modo_horas_extra: "informal" | "recibo" | "a_definir";
+        recargo_feriado_pct: string;
+        aporte_sindical_pct: string;
+        aporte_sepelio_pct: string;
+        aporte_colonia_pct: string;
       }
     >
   >({});
@@ -237,6 +245,10 @@ export default function EmpleadosPage() {
         fraccion_jornada_pct: String(Math.round(e.fraccion_jornada * 10000) / 100),
         modo_informal: e.modo_informal,
         modo_horas_extra: e.modo_horas_extra,
+        recargo_feriado_pct: String(e.recargo_feriado_pct),
+        aporte_sindical_pct: e.aporte_sindical_pct !== null ? String(e.aporte_sindical_pct) : "",
+        aporte_sepelio_pct: e.aporte_sepelio_pct !== null ? String(e.aporte_sepelio_pct) : "",
+        aporte_colonia_pct: e.aporte_colonia_pct !== null ? String(e.aporte_colonia_pct) : "",
       },
     }));
   }
@@ -287,6 +299,10 @@ export default function EmpleadosPage() {
         fraccion_jornada: Number(e.fraccion_jornada_pct) > 0 ? Number(e.fraccion_jornada_pct) / 100 : 1,
         modo_informal: e.modo_informal,
         modo_horas_extra: e.modo_horas_extra,
+        recargo_feriado_pct: Number(e.recargo_feriado_pct) > 0 ? Number(e.recargo_feriado_pct) : 0,
+        aporte_sindical_pct: e.aporte_sindical_pct.trim() === "" ? null : Number(e.aporte_sindical_pct),
+        aporte_sepelio_pct: e.aporte_sepelio_pct.trim() === "" ? null : Number(e.aporte_sepelio_pct),
+        aporte_colonia_pct: e.aporte_colonia_pct.trim() === "" ? null : Number(e.aporte_colonia_pct),
       }),
     });
     await fetchData();
@@ -364,6 +380,10 @@ export default function EmpleadosPage() {
       fraccion_jornada: 1,
       modo_informal: "adicional",
       modo_horas_extra: "informal",
+      recargo_feriado_pct: 0,
+      aporte_sindical_pct: null,
+      aporte_sepelio_pct: null,
+      aporte_colonia_pct: null,
     };
     setNuevoApellido("");
     setNuevoNombrePila("");
@@ -1218,6 +1238,46 @@ export default function EmpleadosPage() {
                         <option value="recibo">En el recibo, legal (50% hábiles / 100% sáb. +13 h, dom. y feriados)</option>
                         <option value="a_definir">A definir (no se pagan, solo se informan)</option>
                       </select>
+                    </Campo>
+                    <Campo label="Recargo feriado trabajado (%)" className="col-span-2">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          step="1"
+                          min="0"
+                          value={ed.recargo_feriado_pct}
+                          onChange={(e) =>
+                            setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], recargo_feriado_pct: e.target.value } }))
+                          }
+                          className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-28"
+                        />
+                        <span className="text-xs text-[#8B6347]">0 = hora normal · 50 = hora y media · 100 = doble (siempre en negro)</span>
+                      </div>
+                    </Campo>
+                    <Campo label="Aportes gremiales propios (%)" className="col-span-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {(
+                          [
+                            ["aporte_sindical_pct", "Sindical"],
+                            ["aporte_sepelio_pct", "Sepelio"],
+                            ["aporte_colonia_pct", "Colonia"],
+                          ] as const
+                        ).map(([key, label]) => (
+                          <label key={key} className="flex items-center gap-1 text-xs text-[#8B6347]">
+                            {label}
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              placeholder="convenio"
+                              value={ed[key]}
+                              onChange={(e) => setEditando((p) => ({ ...p, [emp.id]: { ...p[emp.id], [key]: e.target.value } }))}
+                              className="border border-[#EDE0CC] rounded-lg px-2 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-20"
+                            />
+                          </label>
+                        ))}
+                        <span className="text-xs text-[#8B6347]">Vacío = el de su convenio. Solo si el contador le liquida otro.</span>
+                      </div>
                     </Campo>
                     <Campo label="Jornada">
                       <label className="flex items-center gap-2 text-sm text-[#2C1810] py-1.5">

@@ -20,6 +20,8 @@ interface ConfiguracionLiquidacion {
   contrib_jubilacion_patronal_pct: number;
   contrib_obra_social_patronal_pct: number;
   contrib_seguro_vida_fijo: number;
+  contrib_art_fijo: number;
+  detraccion_contribucion: number;
 }
 
 type FormState = { [K in keyof ConfiguracionLiquidacion]: string };
@@ -70,9 +72,12 @@ interface Convenio {
   aporte_sindical_pct: number;
   aporte_sepelio_pct: number;
   aporte_colonia_pct: number;
+  unidades_sueldo: number;
 }
 
-type ConvenioForm = { [K in "presentismo_pct" | "aporte_sindical_pct" | "aporte_sepelio_pct" | "aporte_colonia_pct"]: string };
+type ConvenioForm = {
+  [K in "presentismo_pct" | "aporte_sindical_pct" | "aporte_sepelio_pct" | "aporte_colonia_pct" | "unidades_sueldo"]: string;
+};
 
 // Los % de cada convenio pisan, para los empleados que lo tienen asignado en
 // su ficha, el presentismo y los aportes sindicales de arriba. Cada fila se
@@ -96,6 +101,7 @@ function ConveniosSection() {
                 aporte_sindical_pct: String(c.aporte_sindical_pct),
                 aporte_sepelio_pct: String(c.aporte_sepelio_pct),
                 aporte_colonia_pct: String(c.aporte_colonia_pct),
+                unidades_sueldo: String(c.unidades_sueldo),
               },
             ])
           )
@@ -117,6 +123,7 @@ function ConveniosSection() {
         aporte_sindical_pct: Number(f.aporte_sindical_pct) || 0,
         aporte_sepelio_pct: Number(f.aporte_sepelio_pct) || 0,
         aporte_colonia_pct: Number(f.aporte_colonia_pct) || 0,
+        unidades_sueldo: Number(f.unidades_sueldo) > 0 ? Number(f.unidades_sueldo) : 30,
       }),
     });
     setGuardado(id);
@@ -141,6 +148,18 @@ function ConveniosSection() {
               <PctField label="Aporte sindical" value={forms[c.id].aporte_sindical_pct} onChange={(v) => set(c.id, "aporte_sindical_pct", v)} />
               <PctField label="Fdo. comp. y sepelio" value={forms[c.id].aporte_sepelio_pct} onChange={(v) => set(c.id, "aporte_sepelio_pct", v)} />
               <PctField label="Colonia de vacaciones" value={forms[c.id].aporte_colonia_pct} onChange={(v) => set(c.id, "aporte_colonia_pct", v)} />
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-[#8B6347] font-medium">Días que liquida el sueldo (de 30)</label>
+                <input
+                  type="number"
+                  step="1"
+                  min="1"
+                  max="30"
+                  value={forms[c.id].unidades_sueldo}
+                  onChange={(e) => set(c.id, "unidades_sueldo", e.target.value)}
+                  className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-20"
+                />
+              </div>
               <button
                 onClick={() => guardar(c.id)}
                 className="text-sm text-white bg-[#2C1810] hover:bg-[#3D2418] px-4 py-2 rounded-full font-medium active:scale-95 transition-colors"
@@ -318,6 +337,8 @@ export default function ConfiguracionPage() {
       contrib_jubilacion_patronal_pct: Number(form.contrib_jubilacion_patronal_pct) || 0,
       contrib_obra_social_patronal_pct: Number(form.contrib_obra_social_patronal_pct) || 0,
       contrib_seguro_vida_fijo: Number(form.contrib_seguro_vida_fijo) || 0,
+      contrib_art_fijo: Number(form.contrib_art_fijo) || 0,
+      detraccion_contribucion: Number(form.detraccion_contribucion) || 0,
     };
     await fetch("/api/configuracion-liquidacion", {
       method: "PATCH",
@@ -387,6 +408,26 @@ export default function ConfiguracionPage() {
                     step="0.01"
                     value={form.contrib_seguro_vida_fijo}
                     onChange={(e) => set("contrib_seguro_vida_fijo", e.target.value)}
+                    className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-32"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs text-[#8B6347] font-medium">ART (monto fijo por empleado)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={form.contrib_art_fijo}
+                    onChange={(e) => set("contrib_art_fijo", e.target.value)}
+                    className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-32"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs text-[#8B6347] font-medium">Detracción contribución jubilatoria</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={form.detraccion_contribucion}
+                    onChange={(e) => set("detraccion_contribucion", e.target.value)}
                     className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843] w-32"
                   />
                 </div>

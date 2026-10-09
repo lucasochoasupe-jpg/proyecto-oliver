@@ -79,6 +79,9 @@ export interface ComprobanteInformalData {
   horas_extra: number; // horas por encima del turno pactado (se pagan siempre en negro)
   horas_extra_valor_hora: number | null;
   horas_extra_monto: number; // horas_extra × valor hora simple, ya en pesos (0 si no aplica)
+  feriado_horas: number; // horas trabajadas en feriado con recargo (en negro)
+  feriado_recargo_pct: number;
+  feriado_monto: number; // recargo por feriado trabajado, ya en pesos (0 si no aplica)
   adelantos: number; // adelantos que quedaron a cargo de esta parte
   total: number;
 }
@@ -292,18 +295,51 @@ export function generarReciboPdf(data: ReciboData): Promise<Buffer> {
     if (data.legal.aporte_os_jornada_reducida > 0)
       filasConceptos.push(["O. Social Jornada Reducida", `- ${formatARS(data.legal.aporte_os_jornada_reducida)}`]);
 
-    y = dibujarTabla(
-      doc,
-      left,
-      y,
-      pageWidth,
-      [
-        { titulo: "CONCEPTO", ancho: pageWidth * 0.7 },
-        { titulo: "MONTO", ancho: pageWidth * 0.3, alinear: "right" },
-      ],
-      filasConceptos
-    );
-    y += 14;
+    // Recibo de convenio: los renglones con código, como el del contador.
+    if (data.legal.conceptos.length > 0) {
+      y = dibujarTabla(
+        doc,
+        left,
+        y,
+        pageWidth,
+        [
+          { titulo: "CÓDIGO", ancho: pageWidth * 0.1 },
+          { titulo: "CONCEPTO", ancho: pageWidth * 0.5 },
+          { titulo: "UNIDAD", ancho: pageWidth * 0.12, alinear: "right" },
+          { titulo: "MONTO", ancho: pageWidth * 0.28, alinear: "right" },
+        ],
+        data.legal.conceptos.map((c) => [
+          c.codigo,
+          c.concepto,
+          c.unidad !== null ? c.unidad.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "",
+          c.monto < 0 ? `- ${formatARS(-c.monto)}` : formatARS(c.monto),
+        ])
+      );
+      y += 8;
+      doc.font("Helvetica").fontSize(8).fillColor(COLOR.header);
+      doc.text(
+        `COMPOSICIÓN SALARIAL: Remunerativo: ${formatARS(data.legal.remunerativo)}   No Remunerativo: ${formatARS(
+          data.legal.no_remunerativo + data.legal.redondeo
+        )}   Descuentos: ${formatARS(data.legal.total_aportes_empleado)}`,
+        left,
+        y,
+        { width: pageWidth }
+      );
+      y += 16;
+    } else {
+      y = dibujarTabla(
+        doc,
+        left,
+        y,
+        pageWidth,
+        [
+          { titulo: "CONCEPTO", ancho: pageWidth * 0.7 },
+          { titulo: "MONTO", ancho: pageWidth * 0.3, alinear: "right" },
+        ],
+        filasConceptos
+      );
+      y += 14;
+    }
 
     // ── Composición salarial / neto ───────────────────────────────────────
     const neto = data.legal.sueldo_bruto - data.legal.total_aportes_empleado;
@@ -327,21 +363,35 @@ export function generarReciboPdf(data: ReciboData): Promise<Buffer> {
     }
 
     // ── Gráfico de composición del costo total ────────────────────────────
-    y += 10;
-    doc.font("Helvetica-Bold").fontSize(9).fillColor(COLOR.header).text("Composición del costo total", left, y);
-    y += 16;
-    dibujarGraficoTorta(doc, left + 55, y + 55, 50, [
-      { label: "Sindical", valor: data.legal.aporte_sindical + data.legal.aporte_sepelio + data.legal.aporte_colonia },
-      { label: "Jubilación", valor: data.legal.aporte_jubilacion + data.legal.costo_jubilacion_patronal },
-      { label: "Ley 19032 / INSSJP", valor: data.legal.aporte_ley19032 },
-      {
-        label: "Obra Social",
-        valor: data.legal.aporte_obra_social + data.legal.aporte_os_jornada_reducida + data.legal.costo_obra_social_patronal,
-      },
-      { label: "ART y otros", valor: data.legal.costo_art + data.legal.costo_seguro_vida },
-      { label: "Sueldo Neto", valor: neto },
-    ]);
-    y += 130;
+    // Gráfico + firmas + pie ocupan ~220 pt. Si no entran (recibo de convenio
+    // con muchos renglones) se omite el gráfico para que las firmas queden en
+    // la misma hoja que el neto — pdfkit cortaría cada texto suelto a su propia
+    // página.
+    const finHoja = doc.page.height - doc.page.margins.bottom;
+    if (y + 220 <= finHoja) {
+      y += 10;
+      doc.font("Helvetica-Bold").fontSize(9).fillColor(COLOR.header).text("Composición del costo total", left, y);
+      y += 16;
+      dibujarGraficoTorta(doc, left + 55, y + 55, 50, [
+        { label: "Sindical", valor: data.legal.aporte_sindical + data.legal.aporte_sepelio + data.legal.aporte_colonia },
+        { label: "Jubilación", valor: data.legal.aporte_jubilacion + data.legal.costo_jubilacion_patronal },
+        { label: "Ley 19032 / INSSJP", valor: data.legal.aporte_ley19032 },
+        {
+          label: "Obra Social",
+          valor:
+            data.legal.aporte_obra_social +
+            data.legal.aporte_os_jornada_reducida +
+            data.legal.aporte_os_acuerdos +
+            data.legal.costo_obra_social_patronal,
+        },
+        { label: "ART y otros", valor: data.legal.costo_art + data.legal.costo_seguro_vida },
+        { label: "Sueldo Neto", valor: neto },
+      ]);
+      y += 130;
+    } else if (y + 70 > finHoja) {
+      doc.addPage();
+      y = doc.page.margins.top;
+    }
 
     // ── Firmas ─────────────────────────────────────────────────────────────
     // Se ubican a un espacio fijo después del contenido (no ancladas al pie
@@ -634,6 +684,11 @@ export function generarComprobanteInformalPdf(data: ComprobanteInformalData): Pr
       const m = Math.round((data.horas_extra - h) * 60);
       const detalle = data.horas_extra_valor_hora ? ` (${h}h ${String(m).padStart(2, "0")}m × ${formatARS(data.horas_extra_valor_hora)})` : "";
       filas.push([`Horas extra${detalle}`, `+ ${formatARS(data.horas_extra_monto)}`]);
+    }
+    if (data.feriado_monto > 0) {
+      const h = Math.floor(data.feriado_horas);
+      const m = Math.round((data.feriado_horas - h) * 60);
+      filas.push([`Recargo feriado trabajado (${h}h ${String(m).padStart(2, "0")}m al ${data.feriado_recargo_pct}%)`, `+ ${formatARS(data.feriado_monto)}`]);
     }
     if (data.monto_ausencia_justificada > 0) filas.push(["Ausencias justificadas con goce", `+ ${formatARS(data.monto_ausencia_justificada)}`]);
     if (data.descuento_tardanza > 0) filas.push(["Descuento por tardanzas", `- ${formatARS(data.descuento_tardanza)}`]);

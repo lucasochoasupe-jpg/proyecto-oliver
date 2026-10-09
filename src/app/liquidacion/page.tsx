@@ -51,6 +51,12 @@ interface AportesLegales {
   costo_seguro_vida: number;
   costo_empleador_total: number;
   costo_total_empleador: number;
+  antiguedad: number;
+  remunerativo: number;
+  no_remunerativo: number;
+  redondeo: number;
+  aporte_os_acuerdos: number;
+  conceptos: { codigo: string; concepto: string; unidad: number | null; monto: number }[];
 }
 
 interface LiquidacionEmpleado extends Omit<ParteDetalle, "total"> {
@@ -70,6 +76,13 @@ interface LiquidacionEmpleado extends Omit<ParteDetalle, "total"> {
     monto: number;
     destino: "informal" | "recibo" | "a_definir";
   };
+  feriado_trabajado: {
+    dias: number;
+    horas: number;
+    recargo_pct: number;
+    valor_hora: number | null;
+    monto: number;
+  };
   escala: { categoria: string; vigente_desde: string; basico: number; no_remunerativo: number; fraccion_jornada: number } | null;
   modo_informal: "adicional" | "complemento";
   informal_pactado: number;
@@ -86,6 +99,11 @@ interface ApiResponse {
 
 function formatMoneda(n: number) {
   return n.toLocaleString("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 });
+}
+
+// Con centavos, para los renglones del recibo (se comparan contra el del contador).
+function formatCentavos(n: number) {
+  return n.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // Compara el total (sueldo fijo mensual, o jornal por día) contra lo que
@@ -206,6 +224,35 @@ function DetalleParte({ p }: { p: ParteDetalle }) {
 // existe cuando el empleado tiene tipo_pago configurado (ver `legal` en
 // LiquidacionEmpleado).
 function DetalleLegal({ legal }: { legal: AportesLegales }) {
+  // Recibo de convenio: los mismos renglones (con código) que el recibo del contador.
+  if (legal.conceptos.length > 0) {
+    return (
+      <>
+        <table className="text-xs my-1">
+          <tbody>
+            {legal.conceptos.map((c, i) => (
+              <tr key={i}>
+                <td className="pr-2 text-[#B89070] tabular-nums">{c.codigo}</td>
+                <td className="pr-3">{c.concepto}</td>
+                <td className="pr-3 text-right text-[#8B6347] tabular-nums">{c.unidad !== null ? c.unidad : ""}</td>
+                <td className={`text-right tabular-nums ${c.monto < 0 ? "text-red-600" : ""}`}>{formatCentavos(c.monto)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p>
+          Remunerativo {formatMoneda(legal.remunerativo)} · no remunerativo {formatMoneda(legal.no_remunerativo + legal.redondeo)} ·
+          descuentos {formatMoneda(legal.total_aportes_empleado)}
+        </p>
+        <p className="text-[#8B6347]">
+          Costo empleador (no se descuenta del sueldo): ART {formatMoneda(legal.costo_art)} · jubilación patronal{" "}
+          {formatMoneda(legal.costo_jubilacion_patronal)} · obra social patronal {formatMoneda(legal.costo_obra_social_patronal)}
+          {legal.costo_seguro_vida > 0 && ` · seguro de vida ${formatMoneda(legal.costo_seguro_vida)}`} — costo total empleador{" "}
+          {formatMoneda(legal.costo_total_empleador)}
+        </p>
+      </>
+    );
+  }
   return (
     <>
       {legal.presentismo > 0 && <p>Presentismo: + {formatMoneda(legal.presentismo)}</p>}
@@ -609,6 +656,12 @@ function LiquidacionMensual() {
                                 {formatMoneda(f.horas_extra.monto)}
                               </p>
                             )}
+                            {f.feriado_trabajado.dias > 0 && f.feriado_trabajado.recargo_pct === 0 && (
+                              <p>
+                                Trabajó {f.feriado_trabajado.dias} feriado{f.feriado_trabajado.dias > 1 ? "s" : ""} ({formatHoras(f.feriado_trabajado.horas)}) — se
+                                paga como día normal, sin recargo
+                              </p>
+                            )}
                             {f.horas_extra.destino === "a_definir" && f.horas_extra.horas > 0 && (
                               <p className="text-amber-700">
                                 Horas extra sin pagar (acuerdo a definir): {formatHoras(f.horas_extra.horas)}
@@ -642,6 +695,13 @@ function LiquidacionMensual() {
                                     Horas extra (por encima del turno pactado): {formatHoras(f.horas_extra.horas)}
                                     {f.horas_extra.valor_hora !== null &&
                                       ` × ${formatMoneda(f.horas_extra.valor_hora)} = + ${formatMoneda(f.horas_extra.monto)}`}
+                                  </p>
+                                )}
+                                {f.feriado_trabajado.monto > 0 && (
+                                  <p>
+                                    Recargo feriado trabajado: {formatHoras(f.feriado_trabajado.horas)} × {f.feriado_trabajado.recargo_pct}%
+                                    {f.feriado_trabajado.valor_hora !== null && ` de ${formatMoneda(f.feriado_trabajado.valor_hora)}`} = +{" "}
+                                    {formatMoneda(f.feriado_trabajado.monto)}
                                   </p>
                                 )}
                                 {f.adelantos_informal > 0 && <p className="text-red-600">Adelantos: - {formatMoneda(f.adelantos_informal)}</p>}
