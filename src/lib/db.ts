@@ -3076,6 +3076,7 @@ export function calcularCumplimiento(filters?: {
   return turnos.map((t): CumplimientoRow => {
     const dia = diaSemanaAR(t.entrada_at);
     const diaAnterior = (dia + 6) % 7;
+    const diaSiguiente = (dia + 1) % 7;
     const enCurso = t.salida_at === null;
     const horariosEmp = horariosPorEmpleado.get(normKey(t.nombre)) ?? [];
     const entradaMin = minutosDelDia(t.entrada_at);
@@ -3090,21 +3091,34 @@ export function calcularCumplimiento(filters?: {
     // igual hay que poder emparejarlo con el turno nocturno de AYER — para
     // eso se suman 1440 min al comparar, y se toma el candidato (de hoy o de
     // ayer) más cercano a la hora real de entrada.
+    // Al revés también: quien entra antes de medianoche (ej. 23:55) a un turno
+    // de madrugada (ej. 02:00) está llegando TEMPRANO al turno de MAÑANA — sin
+    // este candidato se emparejaba con el de hoy a las 02:00, que ya pasó, y
+    // daba ~22 h de tardanza más una falta falsa en el turno de mañana.
+    // `dias` = cuántos días después de la fecha de entrada arranca el turno.
     const candidatosHoy = horariosEmp
       .filter((h) => h.dia_semana === dia)
-      .map((h) => ({ h, diff: entradaMin - horaAMinutos(h.hora_inicio) }));
+      .map((h) => ({ h, dias: 0, diff: entradaMin - horaAMinutos(h.hora_inicio) }));
     const candidatosAyerNocturno = horariosEmp
       .filter((h) => h.dia_semana === diaAnterior && horaAMinutos(h.hora_fin) <= horaAMinutos(h.hora_inicio))
-      .map((h) => ({ h, diff: entradaMin + 1440 - horaAMinutos(h.hora_inicio) }));
+      .map((h) => ({ h, dias: -1, diff: entradaMin + 1440 - horaAMinutos(h.hora_inicio) }));
+    const candidatosMananaTemprano = horariosEmp
+      .filter((h) => h.dia_semana === diaSiguiente)
+      .map((h) => ({ h, dias: 1, diff: entradaMin - 1440 - horaAMinutos(h.hora_inicio) }));
     const fechaTurnoAR = fechaAR(t.entrada_at);
+    const fechaManana = addDiasISO(fechaTurnoAR, 1);
     const puntualesEmp = puntualesPorEmpleado.get(normKey(t.nombre)) ?? [];
     const candidatosPuntuales = puntualesEmp
-      .filter((p) => p.fecha === fechaTurnoAR)
-      .map((p) => ({
-        h: { horario_id: -p.id, dia_semana: dia, hora_inicio: p.hora_inicio, hora_fin: p.hora_fin, tolerancia_min: p.tolerancia_min },
-        diff: entradaMin - horaAMinutos(p.hora_inicio),
-      }));
-    const candidatos = [...candidatosHoy, ...candidatosAyerNocturno, ...candidatosPuntuales];
+      .filter((p) => p.fecha === fechaTurnoAR || p.fecha === fechaManana)
+      .map((p) => {
+        const dias = p.fecha === fechaTurnoAR ? 0 : 1;
+        return {
+          h: { horario_id: -p.id, dia_semana: dias === 0 ? dia : diaSiguiente, hora_inicio: p.hora_inicio, hora_fin: p.hora_fin, tolerancia_min: p.tolerancia_min },
+          dias,
+          diff: entradaMin - dias * 1440 - horaAMinutos(p.hora_inicio),
+        };
+      });
+    const candidatos = [...candidatosHoy, ...candidatosAyerNocturno, ...candidatosMananaTemprano, ...candidatosPuntuales];
 
     if (candidatos.length === 0) {
       return {
@@ -3147,11 +3161,9 @@ export function calcularCumplimiento(filters?: {
       tarde && anticipada ? "tarde_y_anticipada" : tarde ? "tarde" : anticipada ? "salida_anticipada" : "a_horario";
 
     const fechaTurno = fechaAR(t.entrada_at);
-    // Si matcheó por la rama "hoy" (horario.dia_semana === dia), la fecha
-    // pactada es la misma del turno. Si matcheó por la rama nocturna
-    // (horario.dia_semana === diaAnterior), el horario arrancaba el día
-    // anterior al calendario en que el empleado terminó marcando entrada.
-    const fechaEsperada = horario.dia_semana === dia ? fechaTurno : addDiasISO(fechaTurno, -1);
+    // Fecha en que arranca el turno pactado: la misma de la entrada, la
+    // anterior (nocturno de ayer) o la siguiente (madrugada de mañana).
+    const fechaEsperada = addDiasISO(fechaTurno, mejor.dias);
 
     return {
       nombre: t.nombre,
