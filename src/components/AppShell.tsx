@@ -24,9 +24,16 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [hiddenByPage, setHiddenByPage] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
+  // El usuario de Producción solo ve el Recetario: sin menú lateral.
+  const [esProduccion, setEsProduccion] = useState(false);
+
   useEffect(() => {
     setCollapsed(localStorage.getItem(STORAGE_KEY) === "1");
   }, []);
+
+  useEffect(() => {
+    setEsProduccion(document.cookie.split("; ").includes("sanca_rol=produccion"));
+  }, [pathname]);
 
   // Cerrar el drawer mobile al navegar a otra página.
   useEffect(() => {
@@ -45,7 +52,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     return <>{children}</>;
   }
 
-  const showSidebar = !hiddenByPage;
+  const showSidebar = !hiddenByPage && !esProduccion;
 
   return (
     <SetSidebarHiddenContext.Provider value={setHiddenByPage}>
@@ -60,6 +67,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           />
         )}
         <div
+          id="contenido-app"
           className={
             showSidebar
               ? collapsed

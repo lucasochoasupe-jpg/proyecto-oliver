@@ -40,6 +40,12 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    key: "produccion",
+    label: "Producción",
+    icon: "book",
+    links: [{ href: "/recetario", label: "Recetario", icon: "book" }],
+  },
+  {
     key: "finanzas",
     label: "Finanzas",
     icon: "banknote",

@@ -1,5 +1,11 @@
 export const SESSION_COOKIE = "sanca_session";
+// Copia del rol legible desde el navegador, solo para decidir qué mostrar
+// (menú, etc.). Lo que vale para los permisos es el rol firmado de SESSION_COOKIE.
+export const ROL_COOKIE = "sanca_rol";
 const MAX_AGE_SECONDS = 60 * 60 * 24 * 30; // 30 días
+
+// admin: todo el panel. produccion: solo el Recetario (usuario de la cuadra).
+export type Rol = "admin" | "produccion";
 
 function toHex(buffer: ArrayBuffer): string {
   return Array.from(new Uint8Array(buffer))
@@ -23,27 +29,42 @@ async function hmac(data: string): Promise<string> {
   return toHex(sig);
 }
 
-export async function createSessionToken(): Promise<string> {
-  const expires = Date.now() + MAX_AGE_SECONDS * 1000;
-  const sig = await hmac(String(expires));
-  return `${expires}.${sig}`;
+function mismoValor(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
 }
 
-export async function verifySessionToken(token: string | undefined | null): Promise<boolean> {
-  if (!token) return false;
-  const [expiresStr, sig] = token.split(".");
-  if (!expiresStr || !sig) return false;
+export async function createSessionToken(rol: Rol = "admin"): Promise<string> {
+  const expires = Date.now() + MAX_AGE_SECONDS * 1000;
+  const sig = await hmac(`${rol}.${expires}`);
+  return `${rol}.${expires}.${sig}`;
+}
 
-  const expected = await hmac(expiresStr);
-  if (sig.length !== expected.length) return false;
-
-  let diff = 0;
-  for (let i = 0; i < sig.length; i++) {
-    diff |= sig.charCodeAt(i) ^ expected.charCodeAt(i);
+// Devuelve el rol de la sesión, o null si el token no es válido o venció.
+// Los tokens viejos ("expires.sig", sin rol) siguen valiendo como admin.
+export async function verifySessionToken(token: string | undefined | null): Promise<Rol | null> {
+  if (!token) return null;
+  const partes = token.split(".");
+  let rol: Rol;
+  let expiresStr: string;
+  let firmado: string;
+  let sig: string;
+  if (partes.length === 2) {
+    [expiresStr, sig] = partes;
+    rol = "admin";
+    firmado = expiresStr;
+  } else if (partes.length === 3 && (partes[0] === "admin" || partes[0] === "produccion")) {
+    rol = partes[0];
+    [, expiresStr, sig] = partes;
+    firmado = `${rol}.${expiresStr}`;
+  } else {
+    return null;
   }
-  if (diff !== 0) return false;
-
-  return Number(expiresStr) > Date.now();
+  if (!expiresStr || !sig) return null;
+  if (!mismoValor(sig, await hmac(firmado))) return null;
+  return Number(expiresStr) > Date.now() ? rol : null;
 }
 
 export const SESSION_MAX_AGE_SECONDS = MAX_AGE_SECONDS;

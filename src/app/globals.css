@@ -14,6 +14,26 @@
   }
 }
 
+/* Impresión (orden de producción del Recetario): sin menú, sin barra de
+   arriba ni botones; solo el contenido, en blanco. */
+@media print {
+  aside,
+  header,
+  .no-print {
+    display: none !important;
+  }
+  #contenido-app {
+    margin-left: 0 !important;
+  }
+  body {
+    background: white !important;
+  }
+  .print-plano {
+    border: none !important;
+    box-shadow: none !important;
+  }
+}
+
 /* Barra de desplazamiento de la página (y de cualquier caja con scroll):
    beige sobre el crema del fondo, en vez de la gris de Windows. */
 html {
