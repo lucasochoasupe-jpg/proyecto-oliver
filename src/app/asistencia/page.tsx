@@ -62,7 +62,7 @@ function VerChatButton({ conversationId }: { conversationId: number | null }) {
   if (!conversationId) return null;
   return (
     <Link
-      href={`/?conversation=${conversationId}`}
+      href={`/chat?conversation=${conversationId}`}
       className="text-xs font-medium text-[#D4A843] hover:text-[#2C1810] underline"
     >
       Ver chat

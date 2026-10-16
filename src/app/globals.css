@@ -14,6 +14,47 @@
   }
 }
 
+/* Barra de desplazamiento de la página (y de cualquier caja con scroll):
+   beige sobre el crema del fondo, en vez de la gris de Windows. */
+html {
+  scrollbar-color: #D9C3A0 #FBF6EE;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: #FBF6EE;
+}
+::-webkit-scrollbar-thumb {
+  background: #D9C3A0;
+  border-radius: 9999px;
+  border: 2px solid #FBF6EE;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #B89070;
+}
+
+/* Barra de desplazamiento del menú lateral: fina y en los marrones del
+   panel, en vez de la gris/blanca de Windows. */
+.sidebar-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #5C3D2E transparent;
+}
+.sidebar-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.sidebar-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.sidebar-scroll::-webkit-scrollbar-thumb {
+  background: #5C3D2E;
+  border-radius: 9999px;
+}
+.sidebar-scroll::-webkit-scrollbar-thumb:hover {
+  background: #8B6347;
+}
+
 /* Tablas responsive: en desktop se ven como tabla normal. Por debajo de
    md (768px), cada <tr> pasa a ser una tarjeta apilada y cada <td> muestra
    su columna como etiqueta (via data-label), en vez de cortarse fuera de

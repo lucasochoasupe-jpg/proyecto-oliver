@@ -52,9 +52,11 @@ export const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
+export const NAV_INICIO: NavLink = { href: "/", label: "Inicio", icon: "home" };
+
 export const NAV_SUELTOS: NavLink[] = [
   { href: "/configuracion", label: "Configuración", icon: "settings" },
-  { href: "/", label: "Chat", icon: "chat" },
+  { href: "/chat", label: "Chat", icon: "chat" },
 ];
 
 export function esActivo(pathname: string, href: string): boolean {
@@ -67,5 +69,5 @@ export function migaDePan(pathname: string): string | null {
     const link = g.links.find((l) => esActivo(pathname, l.href));
     if (link) return link.label === g.label ? g.label : `${g.label} / ${link.label}`;
   }
-  return NAV_SUELTOS.find((l) => esActivo(pathname, l.href))?.label ?? null;
+  return [NAV_INICIO, ...NAV_SUELTOS].find((l) => esActivo(pathname, l.href))?.label ?? null;
 }

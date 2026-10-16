@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import NavIcon from "./NavIcon";
-import { NAV_GROUPS, NAV_SUELTOS, esActivo, type NavLink } from "./nav";
+import { NAV_GROUPS, NAV_INICIO, NAV_SUELTOS, esActivo, type NavLink } from "./nav";
 
 interface Props {
   collapsed: boolean;
@@ -85,13 +85,14 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen, onMobileToggl
           </button>
         </div>
 
-        <nav className="flex-1 flex flex-col gap-1 px-2 py-3 overflow-y-auto">
+        <nav className="sidebar-scroll flex-1 flex flex-col gap-1 px-2 py-3 overflow-y-auto">
           {collapsed
             ? // Colapsado: se pierden las etiquetas igual, así que agrupar no suma
               // nada — se listan todos los links sueltos, uno por ícono, como antes.
-              [...NAV_GROUPS.flatMap((g) => g.links), ...NAV_SUELTOS].map((link) => renderLink(link))
+              [NAV_INICIO, ...NAV_GROUPS.flatMap((g) => g.links), ...NAV_SUELTOS].map((link) => renderLink(link))
             : (
               <>
+                {renderLink(NAV_INICIO)}
                 {NAV_GROUPS.map((grupo) => {
                   const abierto = abiertos.has(grupo.key);
                   const grupoActivo = grupo.links.some((l) => esActivo(pathname, l.href));

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 interface StatusResponse {
@@ -52,6 +53,12 @@ export default function QRScreen({ onConnected }: Props) {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#FBF6EE] relative">
+      <Link
+        href="/"
+        className="absolute top-4 left-4 text-sm text-[#8B6347] hover:text-[#2C1810] transition-colors font-medium"
+      >
+        ← Volver al inicio
+      </Link>
       <button
         onClick={handleLogout}
         className="absolute top-4 right-4 text-sm text-[#8B6347] hover:text-[#2C1810] transition-colors font-medium border border-[#EDE0CC] hover:border-[#D4A843] px-3 py-1 rounded-full"

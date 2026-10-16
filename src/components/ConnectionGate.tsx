@@ -39,7 +39,7 @@ export default function ConnectionGate() {
 
   // Permite abrir un chat puntual desde otra pantalla (ej. Asistencia →
   // "Ver chat" en un intento rechazado o una marcación pendiente) via
-  // /?conversation=<id>. Solo se aplica una vez al conectar, no en cada poll.
+  // /chat?conversation=<id>. Solo se aplica una vez al conectar, no en cada poll.
   useEffect(() => {
     if (appStatus !== "connected") return;
     const raw = searchParams.get("conversation");
