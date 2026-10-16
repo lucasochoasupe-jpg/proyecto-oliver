@@ -469,7 +469,7 @@ export default function TurnosPage() {
 
   return (
     <div className="min-h-screen bg-[#FAF7F2]">
-      <PageHeader subtitle="Turnos y cumplimiento" />
+      <PageHeader />
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-2">

@@ -212,9 +212,9 @@ export default function EscalasPage() {
 
   return (
     <div className="min-h-screen bg-[#FAF7F2]">
-      <PageHeader subtitle="Escalas salariales" />
+      <PageHeader />
 
-      <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
+      <div className="max-w-7xl mx-auto px-4 py-6 space-y-4">
         <div>
           <h1 className="text-xl font-bold text-[#2C1810]">Escalas salariales</h1>
           <p className="text-sm text-[#8B6347] mt-0.5">

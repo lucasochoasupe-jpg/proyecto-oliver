@@ -1,5 +1,19 @@
 @import "tailwindcss";
 
+/* Botones de acción del encabezado de cada página. Uno solo "primary" por
+   página (la acción principal: agregar, cargar, recibos); el resto "secondary". */
+@layer components {
+  .btn {
+    @apply inline-flex items-center gap-1.5 whitespace-nowrap text-sm font-medium px-4 py-1.5 rounded-full transition-colors active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100;
+  }
+  .btn-primary {
+    @apply bg-[#2C1810] text-white hover:bg-[#3D2418];
+  }
+  .btn-secondary {
+    @apply bg-white text-[#8B6347] border border-[#E2CFAE] hover:text-[#2C1810] hover:border-[#2C1810];
+  }
+}
+
 /* Tablas responsive: en desktop se ven como tabla normal. Por debajo de
    md (768px), cada <tr> pasa a ser una tarjeta apilada y cada <td> muestra
    su columna como etiqueta (via data-label), en vez de cortarse fuera de

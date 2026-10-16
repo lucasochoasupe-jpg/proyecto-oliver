@@ -454,9 +454,9 @@ export default function EmpleadosPage() {
 
   return (
     <div className="min-h-screen bg-[#FAF7F2]">
-      <PageHeader subtitle="Gestión de Empleados" />
+      <PageHeader />
 
-      <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
+      <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
             <h1 className="text-xl font-bold text-[#2C1810]">Empleados</h1>
@@ -467,13 +467,13 @@ export default function EmpleadosPage() {
           <div className="flex items-center gap-2">
             <button
               onClick={() => { window.location.href = "/api/empleados/export"; }}
-              className="text-sm text-[#8B6347] hover:text-[#2C1810] border border-[#D4A843] hover:border-[#2C1810] px-4 py-2 rounded-full active:scale-95 transition-colors"
+              className="btn btn-secondary"
             >
               ↓ Exportar Excel
             </button>
             <button
               onClick={() => { setMostrarForm(true); setErrorForm(""); }}
-              className="text-sm text-white bg-[#2C1810] hover:bg-[#3D2418] px-4 py-2 rounded-full font-medium active:scale-95 transition-colors"
+              className="btn btn-primary"
             >
               + Agregar empleado
             </button>

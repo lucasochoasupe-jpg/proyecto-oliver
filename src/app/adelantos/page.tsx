@@ -210,10 +210,9 @@ export default function AdelantosPage() {
 
   return (
     <div className="min-h-screen bg-[#FAF7F2]">
-      <PageHeader subtitle="Adelantos" />
+      <PageHeader />
 
-      <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
-        <PedidosWhatsApp onCambio={fetchAdelantos} />
+      <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
         <div>
           <h1 className="text-xl font-bold text-[#2C1810]">Adelantos</h1>
           <p className="text-sm text-[#8B6347] mt-0.5">
@@ -221,6 +220,7 @@ export default function AdelantosPage() {
             (primero de la parte informal si la tiene, y el resto de la blanca).
           </p>
         </div>
+        <PedidosWhatsApp onCambio={fetchAdelantos} />
 
         <form onSubmit={agregarAdelanto} className="bg-white rounded-xl border border-[#EDE0CC] p-4 space-y-3">
           <div className="flex flex-wrap gap-3 items-end">

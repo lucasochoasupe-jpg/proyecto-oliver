@@ -77,9 +77,9 @@ export default function SucursalesPage() {
 
   return (
     <div className="min-h-screen bg-[#FAF7F2]">
-      <PageHeader subtitle="Sucursales y QR de Asistencia" />
+      <PageHeader />
 
-      <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
+      <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
             <h1 className="text-xl font-bold text-[#2C1810]">Sucursales</h1>
@@ -89,7 +89,7 @@ export default function SucursalesPage() {
           </div>
           <button
             onClick={fetchData}
-            className="text-xs text-[#8B6347] hover:text-[#2C1810] border border-[#D4A843] hover:border-[#2C1810] px-3 py-1 rounded-full active:scale-95 transition-colors"
+            className="btn btn-secondary"
           >
             ↻ Actualizar
           </button>

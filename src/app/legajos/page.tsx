@@ -47,9 +47,9 @@ export default function LegajosPage() {
 
   return (
     <div className="min-h-screen bg-[#FAF7F2]">
-      <PageHeader subtitle="Legajos" />
+      <PageHeader />
 
-      <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
+      <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
         <div>
           <h1 className="text-xl font-bold text-[#2C1810]">Legajos</h1>
           <p className="text-sm text-[#8B6347] mt-0.5">

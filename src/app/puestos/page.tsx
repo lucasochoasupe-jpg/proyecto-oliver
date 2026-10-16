@@ -226,9 +226,9 @@ export default function PuestosPage() {
 
   return (
     <div className="min-h-screen bg-[#FAF7F2]">
-      <PageHeader subtitle="Puestos y Tareas" />
+      <PageHeader />
 
-      <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
+      <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
             <h1 className="text-xl font-bold text-[#2C1810]">Puestos y Tareas</h1>
@@ -236,7 +236,7 @@ export default function PuestosPage() {
           </div>
           <button
             onClick={abrirNuevo}
-            className="text-sm text-white bg-[#2C1810] hover:bg-[#3D2418] px-4 py-2 rounded-full font-medium active:scale-95 transition-colors"
+            className="btn btn-primary"
           >
             + Nuevo puesto
           </button>

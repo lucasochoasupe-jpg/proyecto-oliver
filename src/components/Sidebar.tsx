@@ -3,67 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-
-interface NavLink {
-  href: string;
-  label: string;
-  icon: string;
-}
-
-interface NavGroup {
-  key: string;
-  label: string;
-  icon: string;
-  links: NavLink[];
-}
-
-// Grupos primero (para no repetir 13 links sueltos en el menú), sueltos
-// después — Configuración y Chat quedan afuera de cualquier grupo porque no
-// son parte de un flujo de trabajo, son utilitarios que se usan solos.
-const NAV_GROUPS: NavGroup[] = [
-  {
-    key: "asistencia",
-    label: "Asistencia",
-    icon: "📍",
-    links: [
-      { href: "/asistencia", label: "Asistencia", icon: "📍" },
-      { href: "/horas", label: "Horas", icon: "⏱" },
-      { href: "/turnos", label: "Turnos", icon: "🕒" },
-      { href: "/sucursales", label: "Sucursales y QR", icon: "🏬" },
-    ],
-  },
-  {
-    key: "rrhh",
-    label: "RRHH",
-    icon: "🗂",
-    links: [
-      { href: "/empleados", label: "Empleados", icon: "👤" },
-      { href: "/rrhh", label: "Panel RRHH", icon: "🗂" },
-      { href: "/puestos", label: "Puestos y Tareas", icon: "🧩" },
-      { href: "/legajos", label: "Legajos", icon: "📁" },
-    ],
-  },
-  {
-    key: "finanzas",
-    label: "Finanzas",
-    icon: "💵",
-    links: [
-      { href: "/liquidacion", label: "Liquidación", icon: "💵" },
-      { href: "/escalas", label: "Escalas salariales", icon: "📊" },
-      { href: "/adelantos", label: "Adelantos", icon: "💸" },
-      { href: "/caja", label: "Caja", icon: "💰" },
-    ],
-  },
-];
-
-const NAV_SUELTOS: NavLink[] = [
-  { href: "/configuracion", label: "Configuración", icon: "⚙️" },
-  { href: "/", label: "Chat", icon: "💬" },
-];
-
-function esActivo(pathname: string, href: string): boolean {
-  return pathname === href || (href !== "/" && pathname.startsWith(href + "/"));
-}
+import NavIcon from "./NavIcon";
+import { NAV_GROUPS, NAV_SUELTOS, esActivo, type NavLink } from "./nav";
 
 interface Props {
   collapsed: boolean;
@@ -105,7 +46,7 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen, onMobileToggl
           collapsed ? "md:justify-center" : indent ? "md:ml-4" : ""
         } ${active ? "bg-[#D4A843] text-[#2C1810]" : "text-[#D4A843] hover:bg-[#3D2418] hover:text-white"}`}
       >
-        <span className="text-base leading-none">{link.icon}</span>
+        <NavIcon name={link.icon} />
         <span className={`truncate ${collapsed ? "md:hidden" : ""}`}>{link.label}</span>
       </Link>
     );
@@ -120,7 +61,7 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen, onMobileToggl
           aria-label="Abrir menú"
           className="md:hidden fixed top-3 left-3 z-50 w-10 h-10 flex items-center justify-center rounded-lg bg-[#2C1810] text-[#D4A843] shadow-lg"
         >
-          <span className="text-xl leading-none">☰</span>
+          <NavIcon name="menu" className="w-5 h-5" />
         </button>
       )}
 
@@ -139,8 +80,8 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen, onMobileToggl
           <span className={`font-bold text-white text-sm leading-tight ${collapsed ? "md:hidden" : ""}`}>
             Panadería San Cayetano II
           </span>
-          <button onClick={onMobileClose} aria-label="Cerrar menú" className="md:hidden ml-auto text-[#D4A843] text-xl leading-none px-1">
-            ✕
+          <button onClick={onMobileClose} aria-label="Cerrar menú" className="md:hidden ml-auto text-[#D4A843] px-1">
+            <NavIcon name="x" className="w-5 h-5" />
           </button>
         </div>
 
@@ -162,9 +103,9 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen, onMobileToggl
                           grupoActivo && !abierto ? "bg-[#3D2418] text-white" : "text-[#D4A843] hover:bg-[#3D2418] hover:text-white"
                         }`}
                       >
-                        <span className="text-base leading-none">{grupo.icon}</span>
+                        <NavIcon name={grupo.icon} />
                         <span className="truncate flex-1 text-left">{grupo.label}</span>
-                        <span className={`text-xs transition-transform ${abierto ? "rotate-90" : ""}`}>▸</span>
+                        <NavIcon name="chevron" className={`w-3.5 h-3.5 transition-transform ${abierto ? "rotate-90" : ""}`} />
                       </button>
                       {abierto && <div className="mt-0.5 space-y-0.5">{grupo.links.map((l) => renderLink(l, true))}</div>}
                     </div>

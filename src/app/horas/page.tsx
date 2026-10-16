@@ -93,7 +93,7 @@ export default function HorasPage() {
 
   return (
     <div className="min-h-screen bg-[#FAF7F2]">
-      <PageHeader subtitle="Horas trabajadas" />
+      <PageHeader />
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-2">
@@ -101,14 +101,14 @@ export default function HorasPage() {
           <div className="flex items-center gap-2 flex-wrap">
             <button
               onClick={fetchData}
-              className="text-xs text-[#8B6347] hover:text-[#2C1810] border border-[#D4A843] hover:border-[#2C1810] px-3 py-1 rounded-full active:scale-95 transition-colors"
+              className="btn btn-secondary"
             >
               ↻ Actualizar
             </button>
             <button
               onClick={exportarExcel}
               disabled={!data || data.resumen.length === 0}
-              className="text-xs text-white bg-[#2C1810] hover:bg-[#3D2418] disabled:opacity-40 disabled:cursor-not-allowed px-3 py-1 rounded-full transition-colors font-medium"
+              className="btn btn-secondary"
             >
               ↓ Exportar Excel
             </button>

@@ -129,8 +129,8 @@ export default function LegajoDetallePage() {
   if (notFound || !empleado) {
     return (
       <div className="min-h-screen bg-[#FAF7F2]">
-        <PageHeader subtitle="Legajos" />
-        <div className="max-w-3xl mx-auto px-4 py-6">
+        <PageHeader />
+        <div className="max-w-7xl mx-auto px-4 py-6 *:max-w-3xl">
           <p className="text-sm text-[#8B6347]">Empleado no encontrado.</p>
           <Link href="/legajos" className="text-sm text-[#D4A843] underline">← Volver a Legajos</Link>
         </div>
@@ -140,9 +140,9 @@ export default function LegajoDetallePage() {
 
   return (
     <div className="min-h-screen bg-[#FAF7F2]">
-      <PageHeader subtitle="Legajos" />
+      <PageHeader />
 
-      <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
+      <div className="max-w-7xl mx-auto px-4 py-6 space-y-6 *:max-w-3xl">
         <div>
           <button onClick={() => router.push("/legajos")} className="text-xs text-[#8B6347] hover:text-[#2C1810] underline mb-2">
             ← Volver a Legajos

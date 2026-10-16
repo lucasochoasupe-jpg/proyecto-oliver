@@ -319,7 +319,7 @@ export default function LiquidacionPage() {
 
   return (
     <div className="min-h-screen bg-[#FAF7F2]">
-      <PageHeader subtitle="Liquidación de sueldos" />
+      <PageHeader />
 
       <div className="max-w-7xl mx-auto px-4 pt-6">
         <div className="inline-flex rounded-full border border-[#EDE0CC] bg-white p-1">
@@ -449,14 +449,14 @@ function LiquidacionMensual() {
         <div className="flex items-center gap-2">
           <button
             onClick={fetchData}
-            className="text-xs text-[#8B6347] hover:text-[#2C1810] border border-[#D4A843] hover:border-[#2C1810] px-3 py-1 rounded-full active:scale-95 transition-colors"
+            className="btn btn-secondary"
           >
             ↻ Actualizar
           </button>
           <button
             onClick={exportarExcel}
             disabled={filas.length === 0}
-            className="text-xs text-white bg-[#2C1810] hover:bg-[#3D2418] disabled:opacity-40 disabled:cursor-not-allowed px-3 py-1 rounded-full transition-colors font-medium"
+            className="btn btn-secondary"
           >
             ↓ Exportar Excel
           </button>
@@ -464,7 +464,7 @@ function LiquidacionMensual() {
             onClick={abrirModalRecibos}
             disabled={filas.length === 0}
             title="Elegí a quién generarle el recibo y descargá un .zip"
-            className="text-xs text-white bg-[#2C1810] hover:bg-[#3D2418] disabled:opacity-40 disabled:cursor-not-allowed px-3 py-1 rounded-full transition-colors font-medium"
+            className="btn btn-primary"
           >
             ↓ Recibos masivos
           </button>
@@ -914,14 +914,14 @@ function LiquidacionAguinaldo() {
         <div className="flex items-center gap-2">
           <button
             onClick={fetchData}
-            className="text-xs text-[#8B6347] hover:text-[#2C1810] border border-[#D4A843] hover:border-[#2C1810] px-3 py-1 rounded-full active:scale-95 transition-colors"
+            className="btn btn-secondary"
           >
             ↻ Actualizar
           </button>
           <button
             onClick={exportarExcel}
             disabled={filas.length === 0}
-            className="text-xs text-white bg-[#2C1810] hover:bg-[#3D2418] disabled:opacity-40 disabled:cursor-not-allowed px-3 py-1 rounded-full transition-colors font-medium"
+            className="btn btn-secondary"
           >
             ↓ Exportar Excel
           </button>
@@ -929,7 +929,7 @@ function LiquidacionAguinaldo() {
             onClick={abrirModalRecibos}
             disabled={filas.length === 0}
             title="Elegí a quién generarle el recibo de aguinaldo y descargá un .zip"
-            className="text-xs text-white bg-[#2C1810] hover:bg-[#3D2418] disabled:opacity-40 disabled:cursor-not-allowed px-3 py-1 rounded-full transition-colors font-medium"
+            className="btn btn-primary"
           >
             ↓ Recibos masivos
           </button>
