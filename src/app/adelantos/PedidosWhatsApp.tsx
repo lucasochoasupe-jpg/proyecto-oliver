@@ -44,8 +44,9 @@ function cuando(unixSec: number): string {
 
 // Pedidos de adelanto que los empleados hacen por WhatsApp (bot → opción 5).
 // Aprobar crea el adelanto con fecha del viernes de entrega; en los dos casos
-// se le avisa al empleado por WhatsApp (salvo que se destilde).
-export default function PedidosWhatsApp({ onCambio }: { onCambio: () => void }) {
+// se le avisa al empleado por WhatsApp (salvo que se destilde). Se usa en
+// Finanzas → Adelantos y en el Panel RRHH.
+export default function PedidosWhatsApp({ onCambio }: { onCambio?: () => void }) {
   const [pedidos, setPedidos] = useState<Pedido[]>([]);
   const [montos, setMontos] = useState<Record<number, string>>({});
   const [comentarios, setComentarios] = useState<Record<number, string>>({});
@@ -80,13 +81,11 @@ export default function PedidosWhatsApp({ onCambio }: { onCambio: () => void }) 
       return;
     }
     await cargar();
-    if (decision === "aprobado") onCambio();
+    onCambio?.();
   }
 
   const pendientes = pedidos.filter((p) => p.estado === "pendiente");
   const resueltos = pedidos.filter((p) => p.estado !== "pendiente");
-  if (pedidos.length === 0) return null;
-
   return (
     <div className="bg-white rounded-xl border border-[#EDE0CC] p-4 space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -106,7 +105,9 @@ export default function PedidosWhatsApp({ onCambio }: { onCambio: () => void }) 
       <p className="text-xs text-[#8B6347]">Se piden hasta el jueves a las 14 h y se entregan el viernes. Al aprobar se carga el adelanto con la fecha de ese viernes.</p>
 
       {pendientes.length === 0 ? (
-        <p className="text-sm text-[#B89070]">No hay pedidos pendientes.</p>
+        <p className="text-sm text-[#B89070]">
+          No hay pedidos pendientes. Los empleados los hacen desde el bot de WhatsApp, con la opción 5 del menú de RRHH.
+        </p>
       ) : (
         <ul className="divide-y divide-[#F3EADB]">
           {pendientes.map((p) => {

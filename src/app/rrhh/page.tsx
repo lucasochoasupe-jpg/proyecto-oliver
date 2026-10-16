@@ -5,6 +5,7 @@ import Link from "next/link";
 import PageHeader from "@/components/PageHeader";
 import EmpleadoMultiSelect from "@/components/EmpleadoMultiSelect";
 import CalendarioFaltas from "./CalendarioFaltas";
+import PedidosWhatsApp from "../adelantos/PedidosWhatsApp";
 import {
   ESTADO_LABEL,
   FILTROS_VACIOS,
@@ -92,7 +93,8 @@ interface DecisionEnCurso {
 }
 
 export default function RRHHPage() {
-  const [vista, setVista] = useState<"listado" | "calendario">("listado");
+  const [vista, setVista] = useState<"listado" | "calendario" | "adelantos">("listado");
+  const [adelantosPendientes, setAdelantosPendientes] = useState(0);
   const [registros, setRegistros] = useState<RegistroRRHH[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -141,11 +143,23 @@ export default function RRHHPage() {
     }
   }, []);
 
+  // Solo para el contador de la pestaña; la lista la carga PedidosWhatsApp.
+  const fetchAdelantosPendientes = useCallback(async () => {
+    const res = await fetch("/api/adelantos/pedidos").catch(() => null);
+    if (!res?.ok) return;
+    const pedidos = (await res.json()) as { estado: string }[];
+    setAdelantosPendientes(pedidos.filter((p) => p.estado === "pendiente").length);
+  }, []);
+
   useEffect(() => {
     fetchData();
-    const id = setInterval(fetchData, 30_000);
+    fetchAdelantosPendientes();
+    const id = setInterval(() => {
+      fetchData();
+      fetchAdelantosPendientes();
+    }, 30_000);
     return () => clearInterval(id);
-  }, [fetchData]);
+  }, [fetchData, fetchAdelantosPendientes]);
 
   useEffect(() => {
     fetch("/api/empleados")
@@ -327,23 +341,26 @@ export default function RRHHPage() {
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3 flex-wrap">
             <h1 className="text-xl font-bold text-[#2C1810]">Ausentismo y Novedades</h1>
-            <div className="flex items-center gap-1 bg-white border border-[#EDE0CC] rounded-full p-1">
-              {(["listado", "calendario"] as const).map((v) => (
-                <button
-                  key={v}
-                  onClick={() => setVista(v)}
-                  className={`text-sm font-medium px-4 py-1.5 rounded-full transition-colors ${
-                    vista === v ? "bg-[#2C1810] text-white" : "text-[#8B6347] hover:text-[#2C1810]"
-                  }`}
-                >
-                  {v === "listado" ? "Pedidos y avisos" : "Calendario de faltas"}
-                  {v === "listado" && pendientesTotales > 0 && (
-                    <span className="ml-1.5 text-[11px] font-bold bg-amber-400 text-[#2C1810] rounded-full px-1.5 py-0.5">
-                      {pendientesTotales}
-                    </span>
-                  )}
-                </button>
-              ))}
+            <div className="flex items-center gap-1 bg-white border border-[#EDE0CC] rounded-full p-1 max-w-full overflow-x-auto">
+              {(["listado", "calendario", "adelantos"] as const).map((v) => {
+                const pendientes = v === "listado" ? pendientesTotales : v === "adelantos" ? adelantosPendientes : 0;
+                return (
+                  <button
+                    key={v}
+                    onClick={() => setVista(v)}
+                    className={`text-sm font-medium px-4 py-1.5 rounded-full whitespace-nowrap transition-colors ${
+                      vista === v ? "bg-[#2C1810] text-white" : "text-[#8B6347] hover:text-[#2C1810]"
+                    }`}
+                  >
+                    {v === "listado" ? "Pedidos y avisos" : v === "calendario" ? "Calendario de faltas" : "Pedidos de adelanto"}
+                    {pendientes > 0 && (
+                      <span className="ml-1.5 text-[11px] font-bold bg-amber-400 text-[#2C1810] rounded-full px-1.5 py-0.5">
+                        {pendientes}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
           {vista === "listado" && (
@@ -385,6 +402,8 @@ export default function RRHHPage() {
         {vista === "calendario" && (
           <CalendarioFaltas sucursales={SUCURSALES} onVerRegistro={verRegistroDesdeCalendario} />
         )}
+
+        {vista === "adelantos" && <PedidosWhatsApp onCambio={fetchAdelantosPendientes} />}
 
         {vista === "listado" && (
           <>
