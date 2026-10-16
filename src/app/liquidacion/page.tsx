@@ -91,6 +91,22 @@ interface LiquidacionEmpleado extends Omit<ParteDetalle, "total"> {
   advertencias: string[];
 }
 
+// Las comparaciones contra el valor hora son información, no un dato que
+// falte cargar: van al detalle sin el ⚠ para que la alerta siga significando algo.
+function esInformativa(a: string): boolean {
+  return a.startsWith("Cobra ") || a.includes("no se puede comparar");
+}
+
+function faltantes(f: LiquidacionEmpleado): string[] {
+  return f.advertencias.filter((a) => !esInformativa(a));
+}
+
+// No fichó nada en el período (o no tiene cómo pagarse): total $0 y sin horas
+// ni días. Se agrupan al final para que no tapen a los que sí cobran.
+function esSinActividad(f: LiquidacionEmpleado): boolean {
+  return f.total === 0 && !f.horas_trabajadas && !f.dias_trabajados;
+}
+
 interface ApiResponse {
   desde: string;
   hasta: string;
@@ -354,6 +370,7 @@ function LiquidacionMensual() {
   const [hasta, setHasta] = useState("");
   const [nombresFiltro, setNombresFiltro] = useState<string[]>([]);
   const [expandido, setExpandido] = useState<number | null>(null);
+  const [verSinActividad, setVerSinActividad] = useState(false);
   const [modalRecibos, setModalRecibos] = useState(false);
   const [seleccionRecibos, setSeleccionRecibos] = useState<Set<string>>(new Set());
   const [busquedaRecibos, setBusquedaRecibos] = useState("");
@@ -434,7 +451,183 @@ function LiquidacionMensual() {
 
   const filas = data?.filas ?? [];
   const totalPeriodo = filas.reduce((acc, f) => acc + f.total, 0);
-  const conAlertas = filas.filter((f) => f.advertencias.length > 0).length;
+  const conAlertas = filas.filter((f) => faltantes(f).length > 0).length;
+  const activas = filas.filter((f) => !esSinActividad(f));
+  const sinActividad = filas.filter(esSinActividad);
+
+  function renderFila(f: LiquidacionEmpleado, i: number) {
+                const descuentos =
+                  f.descuento_tardanza +
+                  f.descuento_ausencia +
+                  f.descuento_sin_goce +
+                  f.adelantos +
+                  (f.legal?.total_aportes_empleado ?? 0) +
+                  (f.informal?.descuento_tardanza ?? 0) +
+                  (f.informal?.descuento_ausencia ?? 0) +
+                  (f.informal?.descuento_sin_goce ?? 0);
+                return (
+                  <Fragment key={f.empleado_id}>
+                    <tr
+                      onClick={() => setExpandido(expandido === f.empleado_id ? null : f.empleado_id)}
+                      className={`border-b border-[#EDE0CC] hover:bg-[#FAF7F2] transition-colors cursor-pointer ${i % 2 === 0 ? "" : "bg-[#FDFAF6]"}`}
+                    >
+                      <td className="px-4 py-3 font-medium text-[#2C1810]" data-label="Empleado">
+                        {f.nombre}
+                        {faltantes(f).length > 0 && (
+                          <span
+                            title={faltantes(f).join("\n")}
+                            className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200"
+                          >
+                            ⚠ {faltantes(f).length}
+                          </span>
+                        )}
+                        {f.horas_en_curso && (
+                          <span className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-200">
+                            ⏱ en curso
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-[#5C3D2E]" data-label="Tipo">
+                        {f.tipo_pago === "mensual"
+                          ? "Mensual"
+                          : f.tipo_pago === "hora"
+                          ? "Por hora"
+                          : f.tipo_pago === "dia"
+                          ? "Por día"
+                          : "—"}
+                      </td>
+                      <td className="px-4 py-3 tabular-nums text-right whitespace-nowrap text-[#8B6347]" data-label="Base">
+                        {f.tipo_pago === "mensual"
+                          ? f.sueldo_mensual !== null
+                            ? formatMoneda(f.sueldo_mensual)
+                            : "—"
+                          : f.tipo_pago === "hora"
+                          ? f.horas_trabajadas !== null
+                            ? `${formatHoras(f.horas_trabajadas)} × ${f.valor_hora ? formatMoneda(f.valor_hora) : "—"}`
+                            : "—"
+                          : f.tipo_pago === "dia"
+                          ? f.dias_trabajados !== null
+                            ? `${f.dias_trabajados} día${f.dias_trabajados === 1 ? "" : "s"} × ${f.valor_dia ? formatMoneda(f.valor_dia) : "—"}`
+                            : f.horas_trabajadas !== null
+                            ? `${formatHoras(f.horas_trabajadas)} × ${f.valor_hora ? formatMoneda(f.valor_hora) : "—"}`
+                            : "—"
+                          : "—"}
+                      </td>
+                      <td className="px-4 py-3 tabular-nums text-right whitespace-nowrap text-red-500" data-label="Descuentos">
+                        {descuentos > 0 ? `- ${formatMoneda(descuentos)}` : "—"}
+                      </td>
+                      <td className="px-4 py-3 tabular-nums text-right whitespace-nowrap text-[#2C1810] font-semibold" data-label="Total">
+                        {formatMoneda(f.total)}
+                        {(f.informal || f.total_informal > 0) && (
+                          <div className="text-[10px] font-normal text-[#8B6347] mt-0.5">
+                            Blanco {formatMoneda(f.total_blanco)} · Informal {formatMoneda(f.total_informal)}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-[#B89070] text-xs whitespace-nowrap">
+                        {f.tipo_pago !== null && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              descargarRecibo(f.empleado_id);
+                            }}
+                            className="mr-3 text-[#8B6347] hover:text-[#2C1810] underline"
+                          >
+                            Recibo (PDF)
+                          </button>
+                        )}
+                        {expandido === f.empleado_id ? "▲ ocultar" : "▼ detalle"}
+                      </td>
+                    </tr>
+                    {expandido === f.empleado_id && (
+                      <tr key={`${f.empleado_id}-detalle`}>
+                        <td colSpan={6} className="detail-cell bg-[#FAF7F2] px-4 py-3">
+                          <div className="text-xs text-[#5C3D2E] space-y-1">
+                            {f.advertencias.map((a, j) =>
+                              esInformativa(a) ? (
+                                <p key={j} className="text-[#8B6347]">ⓘ {a}</p>
+                              ) : (
+                                <p key={j} className="text-amber-700">⚠ {a}</p>
+                              )
+                            )}
+                            {f.adelantos > 0 && (
+                              <p className="text-red-600">
+                                Adelantos en el período: - {formatMoneda(f.adelantos)}
+                                {f.adelantos_informal > 0 && f.adelantos_blanco > 0 && (
+                                  <> (informal - {formatMoneda(f.adelantos_informal)} · blanco - {formatMoneda(f.adelantos_blanco)})</>
+                                )}
+                                {f.adelantos_informal > 0 && f.adelantos_blanco === 0 && " (descontado de la parte informal)"}
+                              </p>
+                            )}
+                            {(f.informal || f.total_informal > 0) && <p className="font-semibold text-[#2C1810]">Blanco</p>}
+                            {f.horas_extra.destino === "recibo" && f.horas_extra.horas > 0 && (
+                              <p>
+                                Horas extra (en el recibo): {f.horas_extra.horas_50 > 0 && `${formatHoras(f.horas_extra.horas_50)} al 50%`}
+                                {f.horas_extra.horas_50 > 0 && f.horas_extra.horas_100 > 0 && " + "}
+                                {f.horas_extra.horas_100 > 0 && `${formatHoras(f.horas_extra.horas_100)} al 100%`}
+                                {f.horas_extra.valor_hora !== null && ` — valor hora ${formatMoneda(f.horas_extra.valor_hora)}`} = +{" "}
+                                {formatMoneda(f.horas_extra.monto)}
+                              </p>
+                            )}
+                            {f.feriado_trabajado.dias > 0 && f.feriado_trabajado.recargo_pct === 0 && (
+                              <p>
+                                Trabajó {f.feriado_trabajado.dias} feriado{f.feriado_trabajado.dias > 1 ? "s" : ""} ({formatHoras(f.feriado_trabajado.horas)}) — se
+                                paga como día normal, sin recargo
+                              </p>
+                            )}
+                            {f.horas_extra.destino === "a_definir" && f.horas_extra.horas > 0 && (
+                              <p className="text-amber-700">
+                                Horas extra sin pagar (acuerdo a definir): {formatHoras(f.horas_extra.horas)}
+                              </p>
+                            )}
+                            {f.escala && (
+                              <p className="text-sky-800">
+                                Sueldo según escala: {f.escala.categoria} (vigente desde {f.escala.vigente_desde.slice(5)}/
+                                {f.escala.vigente_desde.slice(0, 4)}) {formatMoneda(f.escala.basico)}
+                                {f.escala.fraccion_jornada !== 1 &&
+                                  ` × ${Math.round(f.escala.fraccion_jornada * 10000) / 100}% de jornada = ${formatMoneda(f.escala.basico * f.escala.fraccion_jornada)}`}
+                              </p>
+                            )}
+                            <DetalleParte p={{ ...f, total: f.total_blanco }} />
+                            {f.legal && <DetalleLegal legal={f.legal} />}
+                            {(f.informal || f.total_informal > 0) && (
+                              <>
+                                <p className="font-semibold text-[#2C1810] pt-2 border-t border-[#EDE0CC] mt-2">
+                                  Informal
+                                  {f.informal &&
+                                    ` — ${f.informal.tipo_pago === "mensual" ? "Mensual" : f.informal.tipo_pago === "hora" ? "Por hora" : "Por día"}`}
+                                </p>
+                                {f.informal && <DetalleParte p={f.informal} />}
+                                {f.informal && f.modo_informal === "complemento" && (
+                                  <p className="text-sky-800">
+                                    Total pactado {formatMoneda(f.informal_pactado)} − neto del recibo → se paga en informal lo que falta
+                                  </p>
+                                )}
+                                {f.horas_extra.destino === "informal" && f.horas_extra.horas > 0 && (
+                                  <p>
+                                    Horas extra (por encima del turno pactado): {formatHoras(f.horas_extra.horas)}
+                                    {f.horas_extra.valor_hora !== null &&
+                                      ` × ${formatMoneda(f.horas_extra.valor_hora)} = + ${formatMoneda(f.horas_extra.monto)}`}
+                                  </p>
+                                )}
+                                {f.feriado_trabajado.monto > 0 && (
+                                  <p>
+                                    Recargo feriado trabajado: {formatHoras(f.feriado_trabajado.horas)} × {f.feriado_trabajado.recargo_pct}%
+                                    {f.feriado_trabajado.valor_hora !== null && ` de ${formatMoneda(f.feriado_trabajado.valor_hora)}`} = +{" "}
+                                    {formatMoneda(f.feriado_trabajado.monto)}
+                                  </p>
+                                )}
+                                {f.adelantos_informal > 0 && <p className="text-red-600">Adelantos: - {formatMoneda(f.adelantos_informal)}</p>}
+                                <p className="font-medium">Total informal: {formatMoneda(f.total_informal)}</p>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+  }
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
@@ -542,179 +735,27 @@ function LiquidacionMensual() {
               <tr className="border-b border-[#EDE0CC] bg-[#FAF7F2]">
                 <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Empleado</th>
                 <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Tipo</th>
-                <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Base</th>
-                <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Descuentos</th>
-                <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Total</th>
+                <th className="text-right px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Base</th>
+                <th className="text-right px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Descuentos</th>
+                <th className="text-right px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Total</th>
                 <th className="px-4 py-3"></th>
               </tr>
             </thead>
             <tbody>
-              {filas.map((f, i) => {
-                const descuentos =
-                  f.descuento_tardanza +
-                  f.descuento_ausencia +
-                  f.descuento_sin_goce +
-                  f.adelantos +
-                  (f.legal?.total_aportes_empleado ?? 0) +
-                  (f.informal?.descuento_tardanza ?? 0) +
-                  (f.informal?.descuento_ausencia ?? 0) +
-                  (f.informal?.descuento_sin_goce ?? 0);
-                return (
-                  <Fragment key={f.empleado_id}>
-                    <tr
-                      onClick={() => setExpandido(expandido === f.empleado_id ? null : f.empleado_id)}
-                      className={`border-b border-[#EDE0CC] hover:bg-[#FAF7F2] transition-colors cursor-pointer ${i % 2 === 0 ? "" : "bg-[#FDFAF6]"}`}
+              {activas.map((f, i) => renderFila(f, i))}
+              {sinActividad.length > 0 && (
+                <tr className="border-b border-[#EDE0CC] bg-[#FAF7F2]">
+                  <td colSpan={6} className="detail-cell px-4 py-2">
+                    <button
+                      onClick={() => setVerSinActividad((v) => !v)}
+                      className="text-xs font-medium text-[#8B6347] hover:text-[#2C1810]"
                     >
-                      <td className="px-4 py-3 font-medium text-[#2C1810]" data-label="Empleado">
-                        {f.nombre}
-                        {f.advertencias.length > 0 && (
-                          <span className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
-                            ⚠ {f.advertencias.length}
-                          </span>
-                        )}
-                        {f.horas_en_curso && (
-                          <span className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-200">
-                            ⏱ en curso
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-[#5C3D2E]" data-label="Tipo">
-                        {f.tipo_pago === "mensual"
-                          ? "Mensual"
-                          : f.tipo_pago === "hora"
-                          ? "Por hora"
-                          : f.tipo_pago === "dia"
-                          ? "Por día"
-                          : "—"}
-                      </td>
-                      <td className="px-4 py-3 font-mono text-[#8B6347]" data-label="Base">
-                        {f.tipo_pago === "mensual"
-                          ? f.sueldo_mensual !== null
-                            ? formatMoneda(f.sueldo_mensual)
-                            : "—"
-                          : f.tipo_pago === "hora"
-                          ? f.horas_trabajadas !== null
-                            ? `${formatHoras(f.horas_trabajadas)} × ${f.valor_hora ? formatMoneda(f.valor_hora) : "—"}`
-                            : "—"
-                          : f.tipo_pago === "dia"
-                          ? f.dias_trabajados !== null
-                            ? `${f.dias_trabajados} día${f.dias_trabajados === 1 ? "" : "s"} × ${f.valor_dia ? formatMoneda(f.valor_dia) : "—"}`
-                            : f.horas_trabajadas !== null
-                            ? `${formatHoras(f.horas_trabajadas)} × ${f.valor_hora ? formatMoneda(f.valor_hora) : "—"}`
-                            : "—"
-                          : "—"}
-                      </td>
-                      <td className="px-4 py-3 font-mono text-red-500" data-label="Descuentos">
-                        {descuentos > 0 ? `- ${formatMoneda(descuentos)}` : "—"}
-                      </td>
-                      <td className="px-4 py-3 font-mono text-[#2C1810] font-semibold" data-label="Total">
-                        {formatMoneda(f.total)}
-                        {(f.informal || f.total_informal > 0) && (
-                          <div className="text-[10px] font-normal text-[#8B6347] mt-0.5">
-                            Blanco {formatMoneda(f.total_blanco)} · Informal {formatMoneda(f.total_informal)}
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-[#B89070] text-xs whitespace-nowrap">
-                        {f.tipo_pago !== null && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              descargarRecibo(f.empleado_id);
-                            }}
-                            className="mr-3 text-[#8B6347] hover:text-[#2C1810] underline"
-                          >
-                            Recibo (PDF)
-                          </button>
-                        )}
-                        {expandido === f.empleado_id ? "▲ ocultar" : "▼ detalle"}
-                      </td>
-                    </tr>
-                    {expandido === f.empleado_id && (
-                      <tr key={`${f.empleado_id}-detalle`}>
-                        <td colSpan={6} className="detail-cell bg-[#FAF7F2] px-4 py-3">
-                          <div className="text-xs text-[#5C3D2E] space-y-1">
-                            {f.advertencias.map((a, j) => (
-                              <p key={j} className="text-amber-700">⚠ {a}</p>
-                            ))}
-                            {f.adelantos > 0 && (
-                              <p className="text-red-600">
-                                Adelantos en el período: - {formatMoneda(f.adelantos)}
-                                {f.adelantos_informal > 0 && f.adelantos_blanco > 0 && (
-                                  <> (informal - {formatMoneda(f.adelantos_informal)} · blanco - {formatMoneda(f.adelantos_blanco)})</>
-                                )}
-                                {f.adelantos_informal > 0 && f.adelantos_blanco === 0 && " (descontado de la parte informal)"}
-                              </p>
-                            )}
-                            {(f.informal || f.total_informal > 0) && <p className="font-semibold text-[#2C1810]">Blanco</p>}
-                            {f.horas_extra.destino === "recibo" && f.horas_extra.horas > 0 && (
-                              <p>
-                                Horas extra (en el recibo): {f.horas_extra.horas_50 > 0 && `${formatHoras(f.horas_extra.horas_50)} al 50%`}
-                                {f.horas_extra.horas_50 > 0 && f.horas_extra.horas_100 > 0 && " + "}
-                                {f.horas_extra.horas_100 > 0 && `${formatHoras(f.horas_extra.horas_100)} al 100%`}
-                                {f.horas_extra.valor_hora !== null && ` — valor hora ${formatMoneda(f.horas_extra.valor_hora)}`} = +{" "}
-                                {formatMoneda(f.horas_extra.monto)}
-                              </p>
-                            )}
-                            {f.feriado_trabajado.dias > 0 && f.feriado_trabajado.recargo_pct === 0 && (
-                              <p>
-                                Trabajó {f.feriado_trabajado.dias} feriado{f.feriado_trabajado.dias > 1 ? "s" : ""} ({formatHoras(f.feriado_trabajado.horas)}) — se
-                                paga como día normal, sin recargo
-                              </p>
-                            )}
-                            {f.horas_extra.destino === "a_definir" && f.horas_extra.horas > 0 && (
-                              <p className="text-amber-700">
-                                Horas extra sin pagar (acuerdo a definir): {formatHoras(f.horas_extra.horas)}
-                              </p>
-                            )}
-                            {f.escala && (
-                              <p className="text-sky-800">
-                                Sueldo según escala: {f.escala.categoria} (vigente desde {f.escala.vigente_desde.slice(5)}/
-                                {f.escala.vigente_desde.slice(0, 4)}) {formatMoneda(f.escala.basico)}
-                                {f.escala.fraccion_jornada !== 1 &&
-                                  ` × ${Math.round(f.escala.fraccion_jornada * 10000) / 100}% de jornada = ${formatMoneda(f.escala.basico * f.escala.fraccion_jornada)}`}
-                              </p>
-                            )}
-                            <DetalleParte p={{ ...f, total: f.total_blanco }} />
-                            {f.legal && <DetalleLegal legal={f.legal} />}
-                            {(f.informal || f.total_informal > 0) && (
-                              <>
-                                <p className="font-semibold text-[#2C1810] pt-2 border-t border-[#EDE0CC] mt-2">
-                                  Informal
-                                  {f.informal &&
-                                    ` — ${f.informal.tipo_pago === "mensual" ? "Mensual" : f.informal.tipo_pago === "hora" ? "Por hora" : "Por día"}`}
-                                </p>
-                                {f.informal && <DetalleParte p={f.informal} />}
-                                {f.informal && f.modo_informal === "complemento" && (
-                                  <p className="text-sky-800">
-                                    Total pactado {formatMoneda(f.informal_pactado)} − neto del recibo → se paga en informal lo que falta
-                                  </p>
-                                )}
-                                {f.horas_extra.destino === "informal" && f.horas_extra.horas > 0 && (
-                                  <p>
-                                    Horas extra (por encima del turno pactado): {formatHoras(f.horas_extra.horas)}
-                                    {f.horas_extra.valor_hora !== null &&
-                                      ` × ${formatMoneda(f.horas_extra.valor_hora)} = + ${formatMoneda(f.horas_extra.monto)}`}
-                                  </p>
-                                )}
-                                {f.feriado_trabajado.monto > 0 && (
-                                  <p>
-                                    Recargo feriado trabajado: {formatHoras(f.feriado_trabajado.horas)} × {f.feriado_trabajado.recargo_pct}%
-                                    {f.feriado_trabajado.valor_hora !== null && ` de ${formatMoneda(f.feriado_trabajado.valor_hora)}`} = +{" "}
-                                    {formatMoneda(f.feriado_trabajado.monto)}
-                                  </p>
-                                )}
-                                {f.adelantos_informal > 0 && <p className="text-red-600">Adelantos: - {formatMoneda(f.adelantos_informal)}</p>}
-                                <p className="font-medium">Total informal: {formatMoneda(f.total_informal)}</p>
-                              </>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                );
-              })}
+                      {verSinActividad ? "▾" : "▸"} Sin actividad en el período ({sinActividad.length}) — no ficharon o no tienen tipo de pago
+                    </button>
+                  </td>
+                </tr>
+              )}
+              {verSinActividad && sinActividad.map((f, i) => renderFila(f, activas.length + i))}
             </tbody>
           </table>
         )}
@@ -1013,10 +1054,10 @@ function LiquidacionAguinaldo() {
             <thead>
               <tr className="border-b border-[#EDE0CC] bg-[#FAF7F2]">
                 <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Empleado</th>
-                <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Mejor remuneración</th>
-                <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Meses</th>
-                <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Descuentos</th>
-                <th className="text-left px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Total neto</th>
+                <th className="text-right px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Mejor remuneración</th>
+                <th className="text-right px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Meses</th>
+                <th className="text-right px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Descuentos</th>
+                <th className="text-right px-4 py-3 text-xs text-[#8B6347] font-semibold uppercase tracking-wide">Total neto</th>
                 <th className="px-4 py-3"></th>
               </tr>
             </thead>
@@ -1038,7 +1079,7 @@ function LiquidacionAguinaldo() {
                           </span>
                         )}
                       </td>
-                      <td className="px-4 py-3 font-mono text-[#8B6347]" data-label="Mejor remuneración">
+                      <td className="px-4 py-3 tabular-nums text-right whitespace-nowrap text-[#8B6347]" data-label="Mejor remuneración">
                         {f.blanco ? (
                           <>
                             {formatMoneda(f.blanco.mejor_remuneracion)}
@@ -1050,13 +1091,13 @@ function LiquidacionAguinaldo() {
                           "—"
                         )}
                       </td>
-                      <td className="px-4 py-3 font-mono text-[#8B6347]" data-label="Meses">
+                      <td className="px-4 py-3 tabular-nums text-right whitespace-nowrap text-[#8B6347]" data-label="Meses">
                         {meses}/6
                       </td>
-                      <td className="px-4 py-3 font-mono text-red-500" data-label="Descuentos">
+                      <td className="px-4 py-3 tabular-nums text-right whitespace-nowrap text-red-500" data-label="Descuentos">
                         {descuentos > 0 ? `- ${formatMoneda(descuentos)}` : "—"}
                       </td>
-                      <td className="px-4 py-3 font-mono text-[#2C1810] font-semibold" data-label="Total neto">
+                      <td className="px-4 py-3 tabular-nums text-right whitespace-nowrap text-[#2C1810] font-semibold" data-label="Total neto">
                         {formatMoneda(f.total_neto)}
                         {f.informal && (
                           <div className="text-[10px] font-normal text-[#8B6347] mt-0.5">
