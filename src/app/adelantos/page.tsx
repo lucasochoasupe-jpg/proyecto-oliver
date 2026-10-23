@@ -214,7 +214,7 @@ export default function AdelantosPage() {
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
         <div>
-          <h1 className="text-xl font-bold text-[#2C1810]">Adelantos</h1>
+          <h1 className="font-display text-2xl font-semibold tracking-tight text-[#2C1810]">Adelantos</h1>
           <p className="text-sm text-[#8B6347] mt-0.5">
             Registrá los adelantos de sueldo pagados a cada empleado — se descuentan automáticamente en Liquidación
             (primero de la parte informal si la tiene, y el resto de la blanca).

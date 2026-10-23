@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { migaDePan } from "./nav";
 
@@ -11,10 +12,25 @@ interface Props {
   onDisconnect?: () => void;
 }
 
+// Barra fina sobre el título de cada página, en el mismo crema del fondo: la
+// miga de pan y, a la derecha, las acciones de sesión. "Cerrar sesión" vive en
+// el pie del menú lateral; acá solo aparece para el usuario de Producción, que
+// no tiene menú.
+export async function cerrarSesion(router: ReturnType<typeof useRouter>) {
+  await fetch("/api/auth/logout", { method: "POST" });
+  router.push("/login");
+  router.refresh();
+}
+
 export default function PageHeader({ subtitle, onDisconnect }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const titulo = subtitle ?? migaDePan(pathname) ?? "";
+  const [sinMenu, setSinMenu] = useState(false);
+
+  useEffect(() => {
+    setSinMenu(document.cookie.split("; ").includes("sanca_rol=produccion"));
+  }, []);
 
   async function handleDisconnect() {
     const ok = window.confirm(
@@ -25,30 +41,29 @@ export default function PageHeader({ subtitle, onDisconnect }: Props) {
     onDisconnect?.();
   }
 
-  async function handleLogout() {
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.push("/login");
-    router.refresh();
-  }
-
   return (
-    <header className="bg-[#2C1810] pl-14 pr-4 py-3 md:px-6 flex items-center justify-between gap-3 border-b border-[#1A0F08] shrink-0">
-      <span className="text-[#D4A843] text-sm font-medium truncate">{titulo}</span>
+    // En el Chat (pantalla completa, sin título debajo) la barra cierra con un
+    // borde; en el resto se pega al título de la página.
+    <header
+      className={`pl-16 pr-4 pt-5 md:px-6 flex items-center justify-between gap-3 min-h-12 shrink-0 ${
+        onDisconnect ? "pb-3 border-b border-[#EDE0CC]" : "-mb-2"
+      }`}
+    >
+      <span className="text-xs font-medium uppercase tracking-wider text-[#B89070] truncate">{titulo}</span>
       <div className="flex items-center gap-3 shrink-0">
         {onDisconnect && (
           <button
             onClick={handleDisconnect}
-            className="text-xs text-[#B89070] hover:text-red-300 underline underline-offset-2 transition-colors"
+            className="text-xs text-[#B89070] hover:text-red-700 transition-colors"
           >
             Desvincular WhatsApp
           </button>
         )}
-        <button
-          onClick={handleLogout}
-          className="text-sm text-[#D4A843] hover:text-white transition-colors font-medium border border-[#D4A843] hover:border-white px-3 py-1 rounded-full"
-        >
-          Cerrar sesión
-        </button>
+        {sinMenu && (
+          <button onClick={() => cerrarSesion(router)} className="btn btn-secondary">
+            Cerrar sesión
+          </button>
+        )}
       </div>
     </header>
   );

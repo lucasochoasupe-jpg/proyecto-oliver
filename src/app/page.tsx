@@ -74,14 +74,37 @@ function fechaLarga() {
 
 const CARD = "bg-white rounded-xl border border-[#EDE0CC]";
 
-function Stat({ label, valor, detalle, tono }: { label: string; valor: number; detalle?: string; tono?: "ok" | "alerta" }) {
-  const color = tono === "alerta" && valor > 0 ? "text-red-600" : tono === "ok" ? "text-emerald-700" : "text-[#2C1810]";
+// Cartelito de número que lleva a su sección. Los de tono "alerta" se marcan
+// (borde y número en rojo) solo cuando hay algo que mirar.
+function Stat({
+  href,
+  label,
+  valor,
+  detalle,
+  tono,
+}: {
+  href: string;
+  label: string;
+  valor: number;
+  detalle?: string;
+  tono?: "ok" | "alerta";
+}) {
+  const alerta = tono === "alerta" && valor > 0;
+  const color = alerta ? "text-red-700" : tono === "ok" && valor > 0 ? "text-emerald-700" : "text-[#2C1810]";
   return (
-    <div className={`${CARD} p-4`}>
-      <p className="text-xs text-[#8B6347] uppercase tracking-wide font-medium">{label}</p>
-      <p className={`text-3xl font-bold mt-1 tabular-nums ${color}`}>{valor}</p>
+    <Link
+      href={href}
+      className={`group bg-white rounded-xl border p-4 transition-colors hover:bg-[#FFFCF7] ${
+        alerta ? "border-red-200 hover:border-red-300" : "border-[#EDE0CC] hover:border-[#D4A843]"
+      }`}
+    >
+      <p className="text-xs text-[#8B6347] uppercase tracking-wide font-medium flex items-center justify-between gap-2">
+        {label}
+        <span className="text-[#D9C3A0] group-hover:text-[#8B6347] transition-colors">→</span>
+      </p>
+      <p className={`text-3xl font-semibold mt-1 tabular-nums ${color}`}>{valor}</p>
       {detalle && <p className="text-xs text-[#B89070] mt-0.5">{detalle}</p>}
-    </div>
+    </Link>
   );
 }
 
@@ -154,7 +177,7 @@ export default function InicioPage() {
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
         <div className="flex items-end justify-between flex-wrap gap-2">
           <div>
-            <h1 className="text-xl font-bold text-[#2C1810]">{saludo()}</h1>
+            <h1 className="font-display text-2xl font-semibold tracking-tight text-[#2C1810]">{saludo()}</h1>
             <p className="text-sm text-[#8B6347] mt-0.5">{fechaLarga()}</p>
           </div>
           <button onClick={cargar} className="btn btn-secondary">
@@ -176,15 +199,16 @@ export default function InicioPage() {
           <>
             {/* ── Asistencia de hoy: números ── */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <Stat label="Trabajando ahora" valor={a.trabajando.length} tono="ok" />
-              <Stat label="Fichadas hoy" valor={a.fichadas} detalle="turnos con entrada marcada" />
+              <Stat href="/asistencia" label="Trabajando ahora" valor={a.trabajando.length} tono="ok" />
+              <Stat href="/asistencia" label="Fichadas hoy" valor={a.fichadas} detalle="turnos con entrada marcada" />
               <Stat
+                href="/rrhh"
                 label="Faltas hoy"
                 valor={faltasSinAviso.length}
                 tono="alerta"
                 detalle={a.faltas.length > faltasSinAviso.length ? `+ ${a.faltas.length - faltasSinAviso.length} con aviso aprobado` : "sin aviso"}
               />
-              <Stat label="Llegadas tarde" valor={a.tarde.length} tono="alerta" />
+              <Stat href="/horas" label="Llegadas tarde" valor={a.tarde.length} tono="alerta" />
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 lg:items-start lg:grid-rows-[auto_1fr]">

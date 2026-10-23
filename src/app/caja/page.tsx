@@ -360,7 +360,7 @@ export default function CajaPage() {
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
-            <h1 className="text-xl font-bold text-[#2C1810]">Caja</h1>
+            <h1 className="font-display text-2xl font-semibold tracking-tight text-[#2C1810]">Caja</h1>
             <p className="text-sm text-[#8B6347] mt-0.5">
               Ingresos y egresos del negocio por cuenta y concepto — reemplaza la planilla manual.
             </p>
@@ -871,11 +871,11 @@ export default function CajaPage() {
                 <div className="grid grid-cols-2 gap-2">
                   <div className="bg-[#FAF7F2] rounded-lg p-3">
                     <p className="text-xs text-[#8B6347]">Filas nuevas</p>
-                    <p className="text-xl font-bold text-[#2C1810]">{previewImport.nuevas}</p>
+                    <p className="font-display text-2xl font-semibold tracking-tight text-[#2C1810]">{previewImport.nuevas}</p>
                   </div>
                   <div className="bg-[#FAF7F2] rounded-lg p-3">
                     <p className="text-xs text-[#8B6347]">Ya cargadas (se omiten)</p>
-                    <p className="text-xl font-bold text-[#2C1810]">{previewImport.yaCargadas}</p>
+                    <p className="font-display text-2xl font-semibold tracking-tight text-[#2C1810]">{previewImport.yaCargadas}</p>
                   </div>
                 </div>
 

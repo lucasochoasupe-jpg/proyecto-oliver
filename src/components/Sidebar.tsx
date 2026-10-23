@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import NavIcon from "./NavIcon";
+import { cerrarSesion } from "./PageHeader";
 import { NAV_GROUPS, NAV_INICIO, NAV_SUELTOS, esActivo, type NavLink } from "./nav";
 
 interface Props {
@@ -16,6 +17,7 @@ interface Props {
 
 export default function Sidebar({ collapsed, onToggle, mobileOpen, onMobileToggle, onMobileClose }: Props) {
   const pathname = usePathname();
+  const router = useRouter();
   const [abiertos, setAbiertos] = useState<Set<string>>(new Set());
 
   // El grupo que contiene la página actual arranca abierto — así al navegar
@@ -77,7 +79,7 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen, onMobileToggl
       >
         <div className={`flex items-center gap-2 px-3 py-3 border-b border-[#1A0F08] ${collapsed ? "md:justify-center" : ""}`}>
           <img src="/logo.png" alt="Logo" className="w-9 h-9 object-contain rounded-full bg-white p-0.5 shrink-0" />
-          <span className={`font-bold text-white text-sm leading-tight ${collapsed ? "md:hidden" : ""}`}>
+          <span className={`font-display font-semibold text-white text-[15px] leading-tight ${collapsed ? "md:hidden" : ""}`}>
             Panadería San Cayetano II
           </span>
           <button onClick={onMobileClose} aria-label="Cerrar menú" className="md:hidden ml-auto text-[#D4A843] px-1">
@@ -117,6 +119,17 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen, onMobileToggl
               </>
             )}
         </nav>
+
+        <button
+          onClick={() => cerrarSesion(router)}
+          title={collapsed ? "Cerrar sesión" : undefined}
+          className={`mx-2 mb-1 flex items-center gap-2.5 text-sm font-medium px-3 py-2 rounded-lg text-[#B89070] hover:bg-[#3D2418] hover:text-white transition-colors ${
+            collapsed ? "md:justify-center" : ""
+          }`}
+        >
+          <NavIcon name="logout" />
+          <span className={collapsed ? "md:hidden" : ""}>Cerrar sesión</span>
+        </button>
 
         <button
           onClick={onToggle}

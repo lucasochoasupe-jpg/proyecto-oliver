@@ -82,7 +82,7 @@ export default function SucursalesPage() {
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
-            <h1 className="text-xl font-bold text-[#2C1810]">Sucursales</h1>
+            <h1 className="font-display text-2xl font-semibold tracking-tight text-[#2C1810]">Sucursales</h1>
             <p className="text-sm text-[#8B6347] mt-0.5">
               {configuradas} de {sucursales.length} sucursales con ubicación configurada
             </p>

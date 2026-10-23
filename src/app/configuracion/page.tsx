@@ -356,7 +356,7 @@ export default function ConfiguracionPage() {
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6 *:max-w-3xl">
         <div>
-          <h1 className="text-xl font-bold text-[#2C1810]">Configuración de liquidación</h1>
+          <h1 className="font-display text-2xl font-semibold tracking-tight text-[#2C1810]">Configuración de liquidación</h1>
           <p className="text-sm text-[#8B6347] mt-0.5">
             Datos de la empresa y porcentajes de aportes/contribuciones — únicos para toda la empresa, se usan para
             calcular la parte blanca de la liquidación y para generar el recibo.

@@ -147,7 +147,7 @@ export default function LegajoDetallePage() {
           <button onClick={() => router.push("/legajos")} className="text-xs text-[#8B6347] hover:text-[#2C1810] underline mb-2">
             ← Volver a Legajos
           </button>
-          <h1 className="text-xl font-bold text-[#2C1810]">{empleado.nombre}</h1>
+          <h1 className="font-display text-2xl font-semibold tracking-tight text-[#2C1810]">{empleado.nombre}</h1>
           <p className="text-sm text-[#8B6347] mt-0.5">
             {archivos.length} archivo{archivos.length === 1 ? "" : "s"} en el legajo
             {!empleado.activo && <span className="ml-2 text-amber-600">(empleado inactivo)</span>}

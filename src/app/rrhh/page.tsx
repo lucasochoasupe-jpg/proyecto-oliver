@@ -4,10 +4,11 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import Link from "next/link";
 import PageHeader from "@/components/PageHeader";
 import EmpleadoMultiSelect from "@/components/EmpleadoMultiSelect";
+import NavIcon from "@/components/NavIcon";
+import Pildoras from "@/components/Pildoras";
 import CalendarioFaltas from "./CalendarioFaltas";
 import PedidosWhatsApp from "../adelantos/PedidosWhatsApp";
 import {
-  ESTADO_LABEL,
   FILTROS_VACIOS,
   estadoTexto,
   TIPOS,
@@ -24,6 +25,7 @@ import {
 const SUCURSALES = ["Todas", "Fraga", "Campbell", "Mendoza", "Avenida", "Donado", "Montevideo", "Terminal"];
 const CATEGORIAS_MANUALES = ["Vacaciones", "Enfermedad", "Motivo Personal"] as const;
 const ESTADOS_FILTRO: EstadoAusencia[] = ["pendiente", "aprobado", "rechazado"];
+const ESTADO_PLURAL: Record<EstadoAusencia, string> = { pendiente: "Pendientes", aprobado: "Aprobados", rechazado: "Rechazados" };
 
 function formatDate(unix: number) {
   return new Date(unix * 1000).toLocaleDateString("es-AR", {
@@ -221,6 +223,8 @@ export default function RRHHPage() {
   }
 
   const filtrados = useMemo(() => filtrarRegistros(registros ?? [], filtros), [registros, filtros]);
+  // Cuántos hay en cada estado con el resto de los filtros aplicados (para las píldoras).
+  const cantidadPorEstado = (estado: string) => filtrarRegistros(registros ?? [], { ...filtros, estado }).length;
 
   // Resumen de lo que se está viendo (respeta los filtros).
   const resumen = useMemo(() => {
@@ -340,7 +344,7 @@ export default function RRHHPage() {
         {/* Título + pestañas */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-xl font-bold text-[#2C1810]">Ausentismo y Novedades</h1>
+            <h1 className="font-display text-2xl font-semibold tracking-tight text-[#2C1810]">Ausentismo y Novedades</h1>
             <div className="flex items-center gap-1 bg-white border border-[#EDE0CC] rounded-full p-1 max-w-full overflow-x-auto">
               {(["listado", "calendario", "adelantos"] as const).map((v) => {
                 const pendientes = v === "listado" ? pendientesTotales : v === "adelantos" ? adelantosPendientes : 0;
@@ -613,17 +617,19 @@ export default function RRHHPage() {
                   {TIPOS.map((m) => <option key={m}>{m}</option>)}
                 </select>
               </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-[#8B6347] font-medium">Estado</label>
-                <select
-                  value={filtros.estado}
-                  onChange={(e) => setFiltro("estado", e.target.value)}
-                  className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
-                >
-                  <option value="Todos">Todos</option>
-                  {ESTADOS_FILTRO.map((e) => <option key={e} value={e}>{ESTADO_LABEL[e]}</option>)}
-                </select>
-              </div>
+              <Pildoras
+                etiqueta="Estado"
+                valor={filtros.estado}
+                onChange={(v) => setFiltro("estado", v)}
+                opciones={[
+                  { value: "Todos", label: "Todos", cantidad: cantidadPorEstado("Todos") },
+                  ...ESTADOS_FILTRO.map((e) => ({
+                    value: e,
+                    label: ESTADO_PLURAL[e],
+                    cantidad: cantidadPorEstado(e),
+                  })),
+                ]}
+              />
               <label className="flex items-center gap-2 cursor-pointer select-none pb-1.5">
                 <input
                   type="checkbox"
@@ -697,7 +703,9 @@ export default function RRHHPage() {
                       return (
                         <tr
                           key={a.id}
-                          className={`border-b border-[#EDE0CC] hover:bg-[#FAF7F2] transition-colors ${i % 2 === 0 ? "" : "bg-[#FDFAF6]"} ${isSelected ? "bg-[#FDF6E3]" : ""}`}
+                          // Toda la fila abre el detalle, salvo los botones, links y casillas de adentro.
+                          onClick={(e) => { if (!(e.target as HTMLElement).closest("button, a, input, label")) setDetalle(a); }}
+                          className={`cursor-pointer border-b border-[#EDE0CC] hover:bg-[#FAF7F2] transition-colors ${i % 2 === 0 ? "" : "bg-[#FDFAF6]"} ${isSelected ? "bg-[#FDF6E3]" : ""}`}
                         >
                           <td className="px-4 py-3">
                             <input
@@ -780,19 +788,23 @@ export default function RRHHPage() {
                             {formatDate(a.fecha)}
                             <span className="text-xs ml-1 text-[#B89070]">{formatTime(a.fecha)}</span>
                           </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-3">
-                              <button
-                                onClick={() => setDetalle(a)}
-                                className="text-xs text-[#D4A843] hover:text-[#2C1810] font-medium underline"
-                              >
-                                Ver detalle
-                              </button>
+                          <td className="px-4 py-3 whitespace-nowrap">
+                            <div className="flex items-center gap-1 justify-end">
                               <button
                                 onClick={() => setConfirmarBorrado([a.id])}
-                                className="text-xs text-red-400 hover:text-red-600 font-medium underline"
+                                title="Eliminar"
+                                aria-label={`Eliminar el aviso de ${a.nombre}`}
+                                className="p-1.5 rounded-lg text-[#D9C3A0] hover:text-red-600 hover:bg-red-50 transition-colors"
                               >
-                                Eliminar
+                                <NavIcon name="trash" className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => setDetalle(a)}
+                                title="Ver detalle"
+                                aria-label={`Ver detalle del aviso de ${a.nombre}`}
+                                className="p-1.5 rounded-lg text-[#B89070] hover:text-[#2C1810] hover:bg-[#F3EADB] transition-colors"
+                              >
+                                <NavIcon name="chevron" className="w-4 h-4" />
                               </button>
                             </div>
                           </td>

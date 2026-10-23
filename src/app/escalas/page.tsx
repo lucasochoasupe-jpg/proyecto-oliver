@@ -216,7 +216,7 @@ export default function EscalasPage() {
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-4">
         <div>
-          <h1 className="text-xl font-bold text-[#2C1810]">Escalas salariales</h1>
+          <h1 className="font-display text-2xl font-semibold tracking-tight text-[#2C1810]">Escalas salariales</h1>
           <p className="text-sm text-[#8B6347] mt-0.5">
             Sueldo básico y suma no remunerativa de cada categoría, por mes de vigencia. A los empleados con categoría asignada
             (ficha → Datos legales) el sueldo en blanco se les calcula con la escala vigente en el mes que se liquida.

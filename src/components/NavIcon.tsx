@@ -99,6 +99,18 @@ const PATHS = {
   chevron: <path d="m9 18 6-6-6-6" />,
   menu: <path d="M4 6h16M4 12h16M4 18h16" />,
   x: <path d="M18 6 6 18M6 6l12 12" />,
+  trash: (
+    <>
+      <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    </>
+  ),
+  logout: (
+    <>
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <path d="m16 17 5-5-5-5M21 12H9" />
+    </>
+  ),
 };
 
 export type IconName = keyof typeof PATHS;

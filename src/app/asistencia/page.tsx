@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { AsistenciaRecord, CumplimientoRow, AusenciaRow } from "@/lib/db";
 import PageHeader from "@/components/PageHeader";
 import EmpleadoMultiSelect from "@/components/EmpleadoMultiSelect";
+import Pildoras from "@/components/Pildoras";
 
 interface ResumenSucursal {
   entrada: number;
@@ -412,7 +413,7 @@ export default function AsistenciaPage() {
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-2">
-          <h1 className="text-xl font-bold text-[#2C1810]">Asistencia</h1>
+          <h1 className="font-display text-2xl font-semibold tracking-tight text-[#2C1810]">Asistencia</h1>
           <div className="flex items-center gap-2 flex-wrap">
             <button
               onClick={() => abrirManual()}
@@ -504,18 +505,16 @@ export default function AsistenciaPage() {
               </select>
             </div>
           ) : (
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-[#8B6347] font-medium">Mostrar</label>
-              <select
-                value={tipoUnificadoFiltro}
-                onChange={(e) => { setTipoUnificadoFiltro(e.target.value as typeof tipoUnificadoFiltro); setExpandido(null); }}
-                className="border border-[#EDE0CC] rounded-lg px-3 py-1.5 text-sm text-[#2C1810] outline-none focus:border-[#D4A843]"
-              >
-                <option value="Todos">Todos</option>
-                <option value="Asistencias">Solo asistencias</option>
-                <option value="Inasistencias">Solo inasistencias</option>
-              </select>
-            </div>
+            <Pildoras
+              etiqueta="Mostrar"
+              valor={tipoUnificadoFiltro}
+              onChange={(v) => { setTipoUnificadoFiltro(v); setExpandido(null); }}
+              opciones={[
+                { value: "Todos", label: "Todos" },
+                { value: "Asistencias", label: "Asistencias" },
+                { value: "Inasistencias", label: "Inasistencias" },
+              ]}
+            />
           )}
           {hayFiltros && (
             <button

@@ -97,7 +97,7 @@ export default function HorasPage() {
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-2">
-          <h1 className="text-xl font-bold text-[#2C1810]">Horas trabajadas</h1>
+          <h1 className="font-display text-2xl font-semibold tracking-tight text-[#2C1810]">Horas trabajadas</h1>
           <div className="flex items-center gap-2 flex-wrap">
             <button
               onClick={fetchData}

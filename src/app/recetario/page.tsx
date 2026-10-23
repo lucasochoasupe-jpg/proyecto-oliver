@@ -194,7 +194,7 @@ export default function RecetarioPage() {
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
         <div className="flex items-end justify-between flex-wrap gap-2 no-print">
           <div>
-            <h1 className="text-xl font-bold text-[#2C1810]">Recetario</h1>
+            <h1 className="font-display text-2xl font-semibold tracking-tight text-[#2C1810]">Recetario</h1>
             <p className="text-sm text-[#8B6347] mt-0.5">Elegí el producto y cuánto querés hacer: te calcula los ingredientes.</p>
           </div>
           {resultado && (

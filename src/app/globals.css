@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+@theme inline {
+  --font-sans: var(--font-geist), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-fraunces), Georgia, serif;
+}
+
 /* Botones de acción del encabezado de cada página. Uno solo "primary" por
    página (la acción principal: agregar, cargar, recibos); el resto "secondary". */
 @layer components {

@@ -473,7 +473,7 @@ export default function TurnosPage() {
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-2">
-          <h1 className="text-xl font-bold text-[#2C1810]">Turnos</h1>
+          <h1 className="font-display text-2xl font-semibold tracking-tight text-[#2C1810]">Turnos</h1>
           <div className="flex items-center gap-2 bg-white border border-[#EDE0CC] rounded-full p-1">
             {(["horarios", "cumplimiento", "inasistencias"] as const).map((t) => (
               <button

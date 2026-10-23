@@ -67,7 +67,7 @@ export default function QRScreen({ onConnected }: Props) {
       </button>
       <div className="bg-white rounded-2xl shadow-lg p-10 max-w-sm w-full text-center border border-[#EDE0CC]">
         <img src="/logo.png" alt="Logo San Cayetano II" className="w-24 h-24 object-contain mx-auto mb-4" />
-        <h1 className="text-xl font-bold text-[#2C1810] mb-1">Panadería San Cayetano II</h1>
+        <h1 className="font-display text-2xl font-semibold tracking-tight text-[#2C1810] mb-1">Panadería San Cayetano II</h1>
         <p className="text-sm text-[#8B6347] mb-6">
           Abrí WhatsApp en tu teléfono, andá a{" "}
           <span className="font-semibold text-[#2C1810]">Dispositivos vinculados</span> y escaneá este QR.

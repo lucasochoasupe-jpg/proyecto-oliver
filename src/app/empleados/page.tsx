@@ -3,6 +3,8 @@
 import { useEffect, useState, useCallback, type ReactNode } from "react";
 import PageHeader from "@/components/PageHeader";
 import EmpleadoMultiSelect from "@/components/EmpleadoMultiSelect";
+import NavIcon from "@/components/NavIcon";
+import Pildoras from "@/components/Pildoras";
 
 interface Empleado {
   id: number;
@@ -55,6 +57,19 @@ interface SaldoVacaciones {
   dias_usados: number;
   saldo: number | null;
   advertencia: string | null;
+}
+
+// "$ 68.800" + "por hora" para mostrar el pago en dos niveles; null si no tiene tipo de pago.
+function pagoTexto(
+  tipo: string | null | undefined,
+  mensual: number | null | undefined,
+  hora: number | null | undefined,
+  dia: number | null | undefined
+): { monto: string | null; unidad: string } | null {
+  if (tipo === "mensual") return { monto: mensual ? formatMoneda(mensual) : null, unidad: "por mes" };
+  if (tipo === "hora") return { monto: hora ? formatMoneda(hora) : null, unidad: "por hora" };
+  if (tipo === "dia") return { monto: dia ? formatMoneda(dia) : null, unidad: "por día" };
+  return null;
 }
 
 function formatMoneda(n: number) {
@@ -115,7 +130,7 @@ export default function EmpleadosPage() {
   const [loading, setLoading] = useState(true);
   const [nombresFiltro, setNombresFiltro] = useState<string[]>([]);
   const [ordenAsc, setOrdenAsc] = useState(true);
-  const [soloActivos, setSoloActivos] = useState(true);
+  const [estadoFiltro, setEstadoFiltro] = useState<"activos" | "inactivos" | "todos">("activos");
   const [detalleEmpleado, setDetalleEmpleado] = useState<number | null>(null);
 
   // Estado de edición inline
@@ -398,7 +413,8 @@ export default function EmpleadosPage() {
 
   const filtrados = empleados
     .filter((e) => {
-      if (soloActivos && !e.activo) return false;
+      if (estadoFiltro === "activos" && !e.activo) return false;
+      if (estadoFiltro === "inactivos" && e.activo) return false;
       if (nombresFiltro.length > 0) return nombresFiltro.includes(e.nombre);
       return true;
     })
@@ -459,7 +475,7 @@ export default function EmpleadosPage() {
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
-            <h1 className="text-xl font-bold text-[#2C1810]">Empleados</h1>
+            <h1 className="font-display text-2xl font-semibold tracking-tight text-[#2C1810]">Empleados</h1>
             <p className="text-sm text-[#8B6347] mt-0.5">
               {activos} activos · {sinCelular > 0 && <span className="text-amber-600">{sinCelular} sin celular</span>}
             </p>
@@ -570,15 +586,15 @@ export default function EmpleadosPage() {
           >
             {ordenAsc ? "A → Z" : "Z → A"}
           </button>
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={soloActivos}
-              onChange={(e) => setSoloActivos(e.target.checked)}
-              className="accent-[#D4A843] w-4 h-4"
-            />
-            <span className="text-sm text-[#2C1810]">Solo activos</span>
-          </label>
+          <Pildoras
+            valor={estadoFiltro}
+            onChange={setEstadoFiltro}
+            opciones={[
+              { value: "activos", label: "Activos", cantidad: empleados.filter((e) => e.activo).length },
+              { value: "inactivos", label: "Inactivos", cantidad: empleados.filter((e) => !e.activo).length },
+              { value: "todos", label: "Todos", cantidad: empleados.length },
+            ]}
+          />
           <span className="text-xs text-[#B89070] ml-auto">{filtrados.length} empleados</span>
         </div>
 
@@ -650,9 +666,10 @@ export default function EmpleadosPage() {
                   return (
                     <tr
                       key={emp.id}
-                      className={`border-b border-[#EDE0CC] hover:bg-[#FAF7F2] transition-colors ${i % 2 === 0 ? "" : "bg-[#FDFAF6]"} ${!emp.activo ? "opacity-50" : ""} ${isSelected ? "bg-[#FDF6E3]" : ""}`}
+                      onClick={() => { startEdit(emp); setDetalleEmpleado(emp.id); }}
+                      className={`cursor-pointer border-b border-[#EDE0CC] hover:bg-[#FAF7F2] transition-colors ${i % 2 === 0 ? "" : "bg-[#FDFAF6]"} ${!emp.activo ? "opacity-50" : ""} ${isSelected ? "bg-[#FDF6E3]" : ""}`}
                     >
-                      <td className="px-4 py-2.5">
+                      <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
                         <input
                           type="checkbox"
                           checked={isSelected}
@@ -681,7 +698,10 @@ export default function EmpleadosPage() {
                         {emp.jid ? (
                           <div className="flex items-center gap-2">
                             <span className="text-xs bg-green-100 text-green-700 border border-green-200 px-2 py-0.5 rounded-full font-medium">Vinculado</span>
-                            <button onClick={() => desvincular(emp.id)} className="text-xs text-red-400 hover:text-red-600 underline">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); desvincular(emp.id); }}
+                              className="text-xs text-[#B89070] hover:text-red-600 transition-colors"
+                            >
                               Desvincular
                             </button>
                           </div>
@@ -690,33 +710,26 @@ export default function EmpleadosPage() {
                         )}
                       </td>
                       <td className="px-4 py-2.5" data-label="Pago">
-                        <div className="flex flex-col gap-0.5">
-                          {emp.tipo_pago === "mensual" ? (
-                            <span className="text-xs text-[#2C1810]">
-                              Mensual{emp.sueldo_mensual ? ` · ${formatMoneda(emp.sueldo_mensual)}` : ""}
-                            </span>
-                          ) : emp.tipo_pago === "hora" ? (
-                            <span className="text-xs text-[#2C1810]">
-                              Por hora{emp.valor_hora ? ` · ${formatMoneda(emp.valor_hora)}` : ""}
-                            </span>
-                          ) : emp.tipo_pago === "dia" ? (
-                            <span className="text-xs text-[#2C1810]">
-                              Por día{emp.valor_dia ? ` · ${formatMoneda(emp.valor_dia)}` : ""}
-                            </span>
-                          ) : (
-                            <span className="text-xs text-[#B89070] italic">Sin definir</span>
-                          )}
-                          {emp.tipo_pago_informal && (
-                            <span className="text-xs text-[#8B6347]">
-                              Informal:{" "}
-                              {emp.tipo_pago_informal === "mensual"
-                                ? `Mensual${emp.sueldo_mensual_informal ? ` · ${formatMoneda(emp.sueldo_mensual_informal)}` : ""}`
-                                : emp.tipo_pago_informal === "hora"
-                                ? `Por hora${emp.valor_hora_informal ? ` · ${formatMoneda(emp.valor_hora_informal)}` : ""}`
-                                : `Por día${emp.valor_dia_informal ? ` · ${formatMoneda(emp.valor_dia_informal)}` : ""}`}
-                            </span>
-                          )}
-                        </div>
+                        {(() => {
+                          const formal = pagoTexto(emp.tipo_pago, emp.sueldo_mensual, emp.valor_hora, emp.valor_dia);
+                          const informal = pagoTexto(emp.tipo_pago_informal, emp.sueldo_mensual_informal, emp.valor_hora_informal, emp.valor_dia_informal);
+                          return (
+                            <div className="flex flex-col leading-tight">
+                              {formal ? (
+                                <span className="text-sm text-[#2C1810] tabular-nums whitespace-nowrap">
+                                  {formal.monto ?? "—"} <span className="text-xs text-[#B89070]">{formal.unidad}</span>
+                                </span>
+                              ) : (
+                                <span className="text-xs text-[#B89070] italic">Sin definir</span>
+                              )}
+                              {informal && (
+                                <span className="text-xs text-[#8B6347] tabular-nums whitespace-nowrap">
+                                  + informal {informal.monto ?? ""} {informal.unidad}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="px-4 py-2.5" data-label="Vacaciones">
                         {(() => {
@@ -732,7 +745,7 @@ export default function EmpleadosPage() {
                         })()}
                       </td>
                       <td className="px-4 py-2.5" data-label="Estado">
-                        <button onClick={() => toggleActivo(emp)}>
+                        <button onClick={(e) => { e.stopPropagation(); toggleActivo(emp); }} title="Cambiar a activo / inactivo">
                           {emp.activo ? (
                             <span className="text-xs bg-green-100 text-green-700 border border-green-200 px-2 py-0.5 rounded-full font-medium">Activo</span>
                           ) : (
@@ -740,28 +753,37 @@ export default function EmpleadosPage() {
                           )}
                         </button>
                       </td>
-                      <td className="px-4 py-2.5 whitespace-nowrap">
-                        <div className="flex items-center gap-3 justify-end">
-                          {guardado === emp.id && <span className="text-xs text-green-600">✓</span>}
-                          <button
-                            onClick={() => { startEdit(emp); setDetalleEmpleado(emp.id); }}
-                            className="text-xs text-[#D4A843] hover:text-[#2C1810] underline font-medium"
-                          >
-                            Ver detalles →
-                          </button>
+                      <td className="px-4 py-2.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center gap-1 justify-end">
+                          {guardado === emp.id && <span className="text-xs text-green-600 mr-1">✓</span>}
                           {confirmDelete === emp.id ? (
                             <>
-                              <button onClick={() => eliminar(emp.id)} className="text-xs text-white bg-red-500 hover:bg-red-600 px-2 py-0.5 rounded font-medium">
-                                Confirmar
+                              <button onClick={() => eliminar(emp.id)} className="text-xs text-white bg-red-500 hover:bg-red-600 px-2.5 py-1 rounded-full font-medium">
+                                Eliminar
                               </button>
-                              <button onClick={() => setConfirmDelete(null)} className="text-xs text-[#8B6347] underline">
+                              <button onClick={() => setConfirmDelete(null)} className="text-xs text-[#8B6347] hover:text-[#2C1810] px-2 py-1">
                                 Cancelar
                               </button>
                             </>
                           ) : (
-                            <button onClick={() => setConfirmDelete(emp.id)} className="text-xs text-red-400 hover:text-red-600 underline">
-                              Eliminar
-                            </button>
+                            <>
+                              <button
+                                onClick={() => setConfirmDelete(emp.id)}
+                                title="Eliminar empleado"
+                                aria-label={`Eliminar a ${emp.nombre}`}
+                                className="p-1.5 rounded-lg text-[#D9C3A0] hover:text-red-600 hover:bg-red-50 transition-colors"
+                              >
+                                <NavIcon name="trash" className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => { startEdit(emp); setDetalleEmpleado(emp.id); }}
+                                title="Ver detalles"
+                                aria-label={`Ver detalles de ${emp.nombre}`}
+                                className="p-1.5 rounded-lg text-[#B89070] hover:text-[#2C1810] hover:bg-[#F3EADB] transition-colors"
+                              >
+                                <NavIcon name="chevron" className="w-4 h-4" />
+                              </button>
+                            </>
                           )}
                         </div>
                       </td>
