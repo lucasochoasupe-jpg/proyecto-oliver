@@ -25,6 +25,7 @@ import {
 import {
   handleRRHH,
   clearRRHH,
+  enFlujoRRHH,
   esperandoCertificado,
   getCertificadoPendienteIdSeleccionado,
   esperandoCertificadoInline,
@@ -33,7 +34,7 @@ import {
 } from "../rrhh-flow";
 import { resolvePhone, setLidPhone } from "./contacts";
 import { getAdminPhones } from "../admin-phones";
-import { esDueno, handleDueno } from "../dueno-flow";
+import { getGerencia, handleGerencia } from "../gerencia-flow";
 import { sendSafe } from "./send";
 
 // ── Estado pendiente de asistencia (persistente en SQLite, por teléfono) ─────
@@ -366,22 +367,28 @@ export async function handleIncoming(sock: Sock, msg: WAMessage): Promise<void> 
     return;
   }
 
-  // El dueño no es un empleado: tiene su propio menú (resumen de la empresa).
-  if (esDueno(phone)) {
-    clearRRHH(phone);
+  // Gerencia (dueño / administración) tiene su propio menú con el resumen de la
+  // empresa. Si además es empleado y eligió el menú de empleado, sigue en el
+  // flujo RRHH hasta que lo termine o cancele (o venza por inactividad).
+  const gerencia = getGerencia(phone);
+  let textoRRHH = text;
+  if (gerencia && !enFlujoRRHH(phone)) {
+    const esEmpleado = getEmpleadoByJid(phone) !== null;
     try {
-      await handleDueno(text, reply);
+      const eleccion = await handleGerencia(text, gerencia.apodo, esEmpleado, reply);
+      if (eleccion !== "empleado") return;
+      textoRRHH = "hola"; // arranca el flujo RRHH desde el saludo
     } catch (err) {
-      console.error("[bot] Error en el menú del dueño:", err);
+      console.error("[bot] Error en el menú de gerencia:", err);
       await reply("Disculpá, tuve un inconveniente armando el resumen. Probá de nuevo en un ratito. 🙏");
+      return;
     }
-    return;
   }
 
   // Flujo RRHH determinístico (menús en código; el LLM solo resume texto libre).
   // Los mensajes salientes y el aviso a Administración se manejan dentro del flujo.
   try {
-    await handleRRHH(sock, sendJid, phone, text, convo);
+    await handleRRHH(sock, sendJid, phone, textoRRHH, convo);
   } catch (err) {
     console.error("[bot] Error en el flujo RRHH:", err);
     await sendSafe(sock, sendJid, {

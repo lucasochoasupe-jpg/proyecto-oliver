@@ -70,6 +70,10 @@ export function clearRRHH(phone: string): void {
   deleteFlowState(phone, FLOW);
 }
 
+export function enFlujoRRHH(phone: string): boolean {
+  return getFlowState<RRHHState>(phone, FLOW, TTL_SEC) !== null;
+}
+
 // El bot solo vincula un archivo recibido a un certificado si el empleado
 // pasó por uno de estos dos caminos explícitos — nunca de forma automática
 // ante cualquier imagen/documento que llegue:

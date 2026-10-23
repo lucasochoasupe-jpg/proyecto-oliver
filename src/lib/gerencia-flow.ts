@@ -1,7 +1,9 @@
-// Menú del dueño en el bot: cuando escribe el número de DUENO_PHONE, el bot no
-// le muestra el menú de empleados sino un resumen de la empresa, con los mismos
-// cálculos que la página de Inicio del panel (src/app/api/inicio/route.ts).
-// DUENO_APODO es cómo lo saluda.
+// Menú de gerencia en el bot: a los números de GERENCIA (el dueño, y quien
+// lleve la administración) el bot les muestra un resumen de la empresa, con los
+// mismos cálculos que la página de Inicio del panel (src/app/api/inicio/route.ts).
+// GERENCIA="5493415725884:Bochi,5493416869217:Martina" — número y cómo saludarlo.
+// Si el número además es de un empleado, tiene la opción de ir al menú de
+// empleados (avisos, adelantos, certificados) — ver handler.ts.
 import {
   calcularAusencias,
   calcularCumplimiento,
@@ -18,19 +20,23 @@ import { AR_TZ, hoyISO, inicioDeMesISO } from "./date-ar";
 
 const MAX_NOMBRES = 15;
 
-export function esDueno(phone: string): boolean {
-  const dueno = process.env.DUENO_PHONE?.trim();
-  return Boolean(dueno) && phone === dueno;
+// Apodo con el que se saluda al número, o null si no es de gerencia.
+export function getGerencia(phone: string): { apodo: string } | null {
+  for (const entrada of (process.env.GERENCIA ?? "").split(",")) {
+    const [numero, apodo] = entrada.split(":").map((s) => s.trim());
+    if (numero && numero === phone) return { apodo: apodo || "jefe" };
+  }
+  return null;
 }
 
-function apodo(): string {
-  return process.env.DUENO_APODO?.trim() || "jefe";
+function menu(esEmpleado: boolean): string {
+  return (
+    "* [1] Cómo viene el día\n" +
+    "* [2] Pendientes por resolver\n" +
+    "* [3] Números del mes" +
+    (esEmpleado ? "\n* [4] Menú de empleado (avisos, adelantos, certificados)" : "")
+  );
 }
-
-const MENU =
-  "* [1] Cómo viene el día\n" +
-  "* [2] Pendientes por resolver\n" +
-  "* [3] Números del mes";
 
 const VOLVER = "\n\nEscribí *menú* para ver las opciones de nuevo.";
 
@@ -164,10 +170,18 @@ function numerosDelMes(): string {
   );
 }
 
-export async function handleDueno(text: string, reply: (t: string) => Promise<void>): Promise<void> {
+// Devuelve "empleado" cuando eligió ir al menú de empleados (lo maneja el
+// handler pasándole la charla al flujo de RRHH).
+export async function handleGerencia(
+  text: string,
+  apodo: string,
+  esEmpleado: boolean,
+  reply: (t: string) => Promise<void>
+): Promise<"empleado" | void> {
   const t = text.trim().toLowerCase();
   if (t === "1") return reply(resumenDelDia() + VOLVER);
   if (t === "2") return reply(pendientes() + VOLVER);
   if (t === "3") return reply(numerosDelMes() + VOLVER);
-  await reply(`¡Hola, ${apodo()}! 👋 ¿Qué querés ver?\n${MENU}`);
+  if (t === "4" && esEmpleado) return "empleado";
+  await reply(`¡Hola, ${apodo}! 👋 ¿Qué querés ver?\n${menu(esEmpleado)}`);
 }
