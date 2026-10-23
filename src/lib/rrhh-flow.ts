@@ -1,10 +1,7 @@
 import type makeWASocket from "@whiskeysockets/baileys";
 import {
   insertMessage,
-  insertMessageReturningId,
-  getOrCreateConversation,
   setPendingAdminReport,
-  enqueueOutbox,
   validarEmpleadoDB,
   getEmpleadoByJid,
   listSucursales,
@@ -24,6 +21,7 @@ import {
   type Conversation,
   type CertificadoPendiente,
 } from "./db";
+import { avisarAdmins, getAdminPhones } from "./admin-phones";
 import { parseDetalle } from "./openrouter";
 import { sendSafe } from "./baileys/send";
 
@@ -754,14 +752,9 @@ function introAdelanto(nombre: string): { texto: string; bloqueado: boolean } {
 }
 
 function avisarAdministracion(texto: string): void {
-  const adminPhone = process.env.ADMIN_PHONE;
-  if (!adminPhone) {
+  if (avisarAdmins(texto) === null) {
     console.warn("[adelantos] ADMIN_PHONE no configurado — no se pudo avisar:", texto);
-    return;
   }
-  const adminConvo = getOrCreateConversation(adminPhone);
-  insertMessage(adminConvo.id, "assistant", texto);
-  enqueueOutbox(adminConvo.id, adminPhone, texto);
 }
 
 // ── Generación del aviso a Administración ─────────────────────────────────────
@@ -819,13 +812,11 @@ async function procesarDatos(
     `Detalle: ${detalle}.${certNota}${vacacionesNota} Contacto: ${phone}`;
 
   // Enviar a Administración (parte crítica: se persiste + se encola siempre)
-  const adminPhone = process.env.ADMIN_PHONE;
-  if (adminPhone) {
-    const adminConvo = getOrCreateConversation(adminPhone);
+  const adminPhones = getAdminPhones();
+  if (adminPhones.length > 0) {
     setPendingAdminReport(convo.id, reporte);
-    const adminMessageId = insertMessageReturningId(adminConvo.id, "assistant", reporte);
-    enqueueOutbox(adminConvo.id, adminPhone, reporte);
-    console.log(`[rrhh] -> Aviso enviado a admin (${adminPhone}): "${reporte}"`);
+    const adminMessageId = avisarAdmins(reporte);
+    console.log(`[rrhh] -> Aviso enviado a admin (${adminPhones.join(", ")}): "${reporte}"`);
 
     // Registro estructurado del rango de fechas — lo usa la liquidación de
     // sueldos para no descontar como ausencia injustificada un día que el

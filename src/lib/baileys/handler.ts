@@ -32,6 +32,8 @@ import {
   marcarCertificadoEntregado,
 } from "../rrhh-flow";
 import { resolvePhone, setLidPhone } from "./contacts";
+import { getAdminPhones } from "../admin-phones";
+import { esDueno, handleDueno } from "../dueno-flow";
 import { sendSafe } from "./send";
 
 // ── Estado pendiente de asistencia (persistente en SQLite, por teléfono) ─────
@@ -364,6 +366,18 @@ export async function handleIncoming(sock: Sock, msg: WAMessage): Promise<void> 
     return;
   }
 
+  // El dueño no es un empleado: tiene su propio menú (resumen de la empresa).
+  if (esDueno(phone)) {
+    clearRRHH(phone);
+    try {
+      await handleDueno(text, reply);
+    } catch (err) {
+      console.error("[bot] Error en el menú del dueño:", err);
+      await reply("Disculpá, tuve un inconveniente armando el resumen. Probá de nuevo en un ratito. 🙏");
+    }
+    return;
+  }
+
   // Flujo RRHH determinístico (menús en código; el LLM solo resume texto libre).
   // Los mensajes salientes y el aviso a Administración se manejan dentro del flujo.
   try {
@@ -386,7 +400,7 @@ async function handleMediaForward(
   tipo: string,
   conversationId: number,
 ): Promise<void> {
-  const adminPhone = process.env.ADMIN_PHONE;
+  const adminPhones = getAdminPhones();
   console.log(`[bot] <- Archivo (${tipo}) recibido de ${senderLabel}`);
 
   // Solo vinculamos este archivo a un certificado si el empleado pasó por uno
@@ -406,14 +420,12 @@ async function handleMediaForward(
       : "Recibí tu archivo. Lo estoy enviando a Administración ahora mismo. ✅\n\n¿Necesitás algo más o damos por terminada la conversación?\n* [1] Necesito hacer otra consulta\n* [2] Dar por terminada la conversación",
   });
 
-  if (!adminPhone) {
+  if (adminPhones.length === 0) {
     console.warn("[bot] ADMIN_PHONE no configurado — no se puede reenviar el archivo.");
     return;
   }
 
-  const adminJid = adminPhone.includes("@")
-    ? adminPhone
-    : `${adminPhone}@s.whatsapp.net`;
+  const adminJids = adminPhones.map((p) => (p.includes("@") ? p : `${p}@s.whatsapp.net`));
 
   try {
     // Descargar y reenviar el archivo
@@ -429,14 +441,14 @@ async function handleMediaForward(
     if (tipo === "imageMessage") {
       mimetype = msg.message?.imageMessage?.mimetype ?? "image/jpeg";
       fileName = `certificado-${Date.now()}.${mimetype.split("/")[1] ?? "jpg"}`;
-      await sendSafe(sock, adminJid, { image: buffer, caption, mimetype });
+      for (const jid of adminJids) await sendSafe(sock, jid, { image: buffer, caption, mimetype });
     } else {
       const docMsg =
         msg.message?.documentMessage ??
         msg.message?.documentWithCaptionMessage?.message?.documentMessage;
       mimetype = docMsg?.mimetype ?? "application/pdf";
       fileName = docMsg?.fileName ?? "certificado";
-      await sendSafe(sock, adminJid, { document: buffer, caption, mimetype, fileName });
+      for (const jid of adminJids) await sendSafe(sock, jid, { document: buffer, caption, mimetype, fileName });
     }
 
     // Guardar en el legajo del empleado — solo cuando el archivo pasó por uno
@@ -462,7 +474,7 @@ async function handleMediaForward(
       marcarCertificadoEntregado(phone);
     }
 
-    console.log(`[bot] -> Archivo reenviado a admin (${adminPhone})`);
+    console.log(`[bot] -> Archivo reenviado a admin (${adminPhones.join(", ")})`);
   } catch (err) {
     console.error("[bot] Error al reenviar archivo al admin:", err);
     await sendSafe(sock, sendJid, {

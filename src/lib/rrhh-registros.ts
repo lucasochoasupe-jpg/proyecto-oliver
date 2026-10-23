@@ -17,6 +17,7 @@ import db, {
   type AusenciaReportada,
   type LegajoArchivo,
 } from "./db";
+import { getAdminPhonesCopia } from "./admin-phones";
 import {
   clasificarMotivo,
   formatISOCorta,
@@ -69,15 +70,18 @@ function camposAusencia(a: AusenciaReportada | undefined) {
 
 export function listarRegistrosRRHH(): RegistroRRHH[] {
   // Todos los mensajes de assistant que contengan avisos a Administración
+  // (menos las copias que van a los números extra de ADMIN_PHONE)
+  const copias = getAdminPhonesCopia();
   const rows = db
     .prepare(
       `SELECT m.id, m.content, m.created_at, c.phone
        FROM messages m
        JOIN conversations c ON c.id = m.conversation_id
        WHERE m.role = 'assistant' AND (m.content LIKE '%<ADMIN>%' OR m.content LIKE '%Aviso de Sanca:%')
+         ${copias.length > 0 ? `AND c.phone NOT IN (${copias.map(() => "?").join(", ")})` : ""}
        ORDER BY m.created_at DESC`
     )
-    .all() as { id: number; content: string; created_at: number; phone: string }[];
+    .all(...copias) as { id: number; content: string; created_at: number; phone: string }[];
 
   const ocultos = listAvisosOcultos();
   const visibles = rows.filter((r) => !ocultos.has(r.id));

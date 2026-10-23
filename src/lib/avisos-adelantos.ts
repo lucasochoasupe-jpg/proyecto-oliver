@@ -2,14 +2,8 @@
 // cierran los pedidos de la semana, se le manda a Administración la lista de
 // los que siguen pendientes para el viernes. Una sola vez por semana (queda
 // marcado en sistema_kv). Lo corre el proceso del bot (scripts/start-bot.ts).
-import {
-  enqueueOutbox,
-  getOrCreateConversation,
-  getSistemaKV,
-  insertMessage,
-  listPedidosAdelanto,
-  setSistemaKV,
-} from "./db";
+import { getSistemaKV, listPedidosAdelanto, setSistemaKV } from "./db";
+import { avisarAdmins } from "./admin-phones";
 
 const AR_OFFSET_SEC = 3 * 3600;
 
@@ -23,8 +17,7 @@ export function enviarResumenAdelantosSiCorresponde(ahoraSec: number = Math.floo
   setSistemaKV(clave, String(ahoraSec));
 
   const pendientes = listPedidosAdelanto().filter((p) => p.estado === "pendiente" && p.fecha_pago === viernes);
-  const adminPhone = process.env.ADMIN_PHONE;
-  if (pendientes.length === 0 || !adminPhone) return;
+  if (pendientes.length === 0) return;
 
   const pesos = (n: number) => "$" + Math.round(n).toLocaleString("es-AR");
   const total = pendientes.reduce((a, p) => a + p.monto, 0);
@@ -34,7 +27,5 @@ export function enviarResumenAdelantosSiCorresponde(ahoraSec: number = Math.floo
     `${pendientes.length} pendiente${pendientes.length === 1 ? "" : "s"} por ${pesos(total)}.\n` +
     pendientes.map((p) => `• ${p.empleado_nombre}: ${pesos(p.monto)}${p.numero_vinculado ? "" : " ⚠ verificar número"}`).join("\n") +
     "\n\nAprobalos o rechazalos en el panel: Finanzas → Adelantos.";
-  const convo = getOrCreateConversation(adminPhone);
-  insertMessage(convo.id, "assistant", texto);
-  enqueueOutbox(convo.id, adminPhone, texto);
+  avisarAdmins(texto);
 }

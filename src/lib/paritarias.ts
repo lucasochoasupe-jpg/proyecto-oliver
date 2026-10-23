@@ -7,14 +7,12 @@
 // descarta. Lo corre el proceso del bot (scripts/start-bot.ts).
 import {
   contarParitariasConocidas,
-  enqueueOutbox,
-  getOrCreateConversation,
-  insertMessage,
   listConvenios,
   listParitariasPendientes,
   marcarParitariaAvisada,
   registrarParitaria,
 } from "./db";
+import { avisarAdmins } from "./admin-phones";
 
 const PAGINAS: { codigo: string; url: string }[] = [
   { codigo: "615/10", url: "https://www.panaderosderosario.org.ar/sitio/escala-panaderos/" },
@@ -24,14 +22,9 @@ const PAGINAS: { codigo: string; url: string }[] = [
 const RECORDAR_CADA_SEG = 3 * 24 * 3600;
 
 function avisarAdministracion(texto: string): void {
-  const adminPhone = process.env.ADMIN_PHONE;
-  if (!adminPhone) {
+  if (avisarAdmins(texto) === null) {
     console.warn("[paritarias] ADMIN_PHONE no configurado — no se puede avisar:", texto);
-    return;
   }
-  const convo = getOrCreateConversation(adminPhone);
-  insertMessage(convo.id, "assistant", texto);
-  enqueueOutbox(convo.id, adminPhone, texto);
 }
 
 async function pdfsPublicados(url: string): Promise<string[]> {
