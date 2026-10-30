@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import PageHeader from "@/components/PageHeader";
 
 type Unidad = "kg" | "unidad";
@@ -42,10 +42,12 @@ interface Resultado {
   advertencias: string[];
 }
 
-const CARD = "bg-white rounded-xl border border-[#EDE0CC]";
+const CARD = "bg-white rounded-2xl border border-[#EDE0CC] shadow-[0_1px_2px_rgba(44,24,16,0.04)]";
 
+// Sin tildes y en minúscula, conservando el largo (cada letra sigue siendo una
+// letra) para poder resaltar la coincidencia sobre el nombre original.
 function normalizar(s: string) {
-  return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+  return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 }
 
 function nombreLindo(s: string) {
@@ -79,17 +81,50 @@ function fechaHora(unixSec: number) {
   });
 }
 
+function inicial(nombre: string) {
+  const c = normalizar(nombre.trim()).charAt(0).toUpperCase();
+  return /[A-Z]/.test(c) ? c : "#";
+}
+
+function Resaltado({ texto, busqueda }: { texto: string; busqueda: string }) {
+  const q = normalizar(busqueda.trim());
+  const i = q ? normalizar(texto).indexOf(q) : -1;
+  if (i < 0) return <>{texto}</>;
+  return (
+    <>
+      {texto.slice(0, i)}
+      <mark className="bg-[#F6E7C1] text-[#2C1810] rounded-sm">{texto.slice(i, i + q.length)}</mark>
+      {texto.slice(i + q.length)}
+    </>
+  );
+}
+
+function Icono({ d, className = "w-4 h-4" }: { d: string; className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
+      <path d={d} />
+    </svg>
+  );
+}
+const ICONO_LUPA = "M21 21l-4.3-4.3M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z";
+const ICONO_CHEVRON = "M6 9l6 6 6-6";
+const ICONO_X = "M18 6 6 18M6 6l12 12";
+
 function TablaLineas({ lineas }: { lineas: Linea[] }) {
   return (
     <table className="w-full text-sm">
       <tbody>
         {lineas.map((l, i) => (
-          <tr key={i} className="border-b border-[#F3EADB] last:border-b-0">
-            <td className="py-1.5 pr-3 text-[#2C1810]">
+          <tr key={i} className="border-b border-dashed border-[#EFE3D0] last:border-b-0">
+            <td className="py-2 pr-3 text-[#2C1810]">
               {nombreLindo(l.descripcion)}
-              {l.es_receta && <span className="ml-2 text-xs text-sky-700">preparación ↓</span>}
+              {l.es_receta && (
+                <span className="ml-2 inline-block rounded-full bg-sky-50 border border-sky-200 px-2 py-px text-[11px] text-sky-700 align-middle">
+                  preparación
+                </span>
+              )}
             </td>
-            <td className="py-1.5 text-right tabular-nums font-semibold text-[#2C1810] whitespace-nowrap">
+            <td className="py-2 text-right tabular-nums font-semibold text-[#2C1810] whitespace-nowrap">
               {formatCantidad(l.cantidad, l.unidad)}
             </td>
           </tr>
@@ -103,6 +138,7 @@ export default function RecetarioPage() {
   const [data, setData] = useState<ProductosResponse | null>(null);
   const [busqueda, setBusqueda] = useState("");
   const [abierto, setAbierto] = useState(false);
+  const [activo, setActivo] = useState(0);
   const [elegido, setElegido] = useState<Producto | null>(null);
   const [cantidad, setCantidad] = useState("");
   const [unidad, setUnidad] = useState<Unidad>("kg");
@@ -113,6 +149,9 @@ export default function RecetarioPage() {
   const [sincronizando, setSincronizando] = useState(false);
   const [msgSync, setMsgSync] = useState<string | null>(null);
   const [verRevision, setVerRevision] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const cantidadRef = useRef<HTMLInputElement>(null);
+  const listaRef = useRef<HTMLUListElement>(null);
 
   const cargar = useCallback(async () => {
     const admin = !document.cookie.split("; ").includes("sanca_rol=produccion");
@@ -125,13 +164,23 @@ export default function RecetarioPage() {
     cargar();
   }, [cargar]);
 
-  const visibles = useMemo(() => (data?.productos ?? []).filter((p) => !p.oculto && p.unidad), [data]);
+  const visibles = useMemo(
+    () =>
+      (data?.productos ?? [])
+        .filter((p) => !p.oculto && p.unidad)
+        .sort((a, b) => a.nombre.trim().localeCompare(b.nombre.trim(), "es", { sensitivity: "base" })),
+    [data]
+  );
   const sugerencias = useMemo(() => {
-    const q = normalizar(busqueda);
-    const lista = q ? visibles.filter((p) => normalizar(p.nombre).includes(q)) : visibles;
-    return [...lista].sort((a, b) => a.nombre.localeCompare(b.nombre, "es")).slice(0, 40);
+    const q = normalizar(busqueda.trim());
+    return q ? visibles.filter((p) => normalizar(p.nombre).includes(q) || p.producto_id === q) : visibles;
   }, [busqueda, visibles]);
   const conProblemas = (data?.productos ?? []).filter((p) => p.problemas.length > 0 && !p.oculto).length;
+
+  useEffect(() => setActivo(0), [busqueda]);
+  useEffect(() => {
+    listaRef.current?.querySelector(`[data-idx="${activo}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [activo]);
 
   function elegir(p: Producto) {
     setElegido(p);
@@ -140,12 +189,36 @@ export default function RecetarioPage() {
     setUnidad(p.unidad ?? "kg");
     setResultado(null);
     setError(null);
+    setTimeout(() => cantidadRef.current?.focus(), 0);
   }
 
-  async function calcular(e?: React.FormEvent) {
+  function limpiar() {
+    setBusqueda("");
+    setElegido(null);
+    setResultado(null);
+    setError(null);
+    setAbierto(true);
+    inputRef.current?.focus();
+  }
+
+  function teclaBuscador(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!abierto) return setAbierto(true);
+      const n = sugerencias.length;
+      if (n) setActivo((a) => (a + (e.key === "ArrowDown" ? 1 : n - 1)) % n);
+    } else if (e.key === "Enter" && abierto && !elegido) {
+      e.preventDefault();
+      if (sugerencias[activo]) elegir(sugerencias[activo]);
+    } else if (e.key === "Escape") {
+      setAbierto(false);
+    }
+  }
+
+  async function calcular(e?: React.FormEvent, cantidadPedida = cantidad) {
     e?.preventDefault();
     if (!elegido) return setError("Elegí un producto de la lista.");
-    const params = new URLSearchParams({ producto: elegido.producto_id, cantidad, unidad });
+    const params = new URLSearchParams({ producto: elegido.producto_id, cantidad: cantidadPedida, unidad });
     setCalculando(true);
     setError(null);
     const res = await fetch(`/api/recetario/calcular?${params}`);
@@ -187,6 +260,25 @@ export default function RecetarioPage() {
   const puedeUnidad = elegido?.unidad === "unidad";
   const puedeKg = elegido?.unidad === "kg" || (elegido?.unidad === "unidad" && (elegido?.masa_g ?? 0) > 0);
 
+  // Atajos de cantidad: la receta base tal cual y algunos múltiplos.
+  const atajos = useMemo(() => {
+    if (!elegido) return [];
+    const base = unidad === elegido.unidad ? elegido.rinde : unidad === "kg" ? elegido.masa_g / 1000 : 0;
+    if (!(base > 0)) return [];
+    return [1, 2, 5].map((m) => ({ etiqueta: m === 1 ? "Receta base" : `×${m}`, valor: Math.round(base * m * 100) / 100 }));
+  }, [elegido, unidad]);
+
+  // Índice de cada sugerencia dentro de la lista agrupada por letra.
+  let idx = 0;
+  const grupos: { letra: string; productos: { p: Producto; i: number }[] }[] = [];
+  for (const p of sugerencias) {
+    const letra = inicial(p.nombre);
+    if (grupos.at(-1)?.letra !== letra) grupos.push({ letra, productos: [] });
+    grupos.at(-1)!.productos.push({ p, i: idx++ });
+  }
+
+  const toggleBase = "px-4 py-2 rounded-full text-sm font-medium transition-colors disabled:opacity-30 disabled:cursor-not-allowed";
+
   return (
     <div className="min-h-screen bg-[#FAF7F2]">
       <PageHeader />
@@ -195,7 +287,10 @@ export default function RecetarioPage() {
         <div className="flex items-end justify-between flex-wrap gap-2 no-print">
           <div>
             <h1 className="font-display text-2xl font-semibold tracking-tight text-[#2C1810]">Recetario</h1>
-            <p className="text-sm text-[#8B6347] mt-0.5">Elegí el producto y cuánto querés hacer: te calcula los ingredientes.</p>
+            <p className="text-sm text-[#8B6347] mt-0.5">
+              Elegí el producto y cuánto querés hacer: te calcula los ingredientes.
+              {visibles.length > 0 && <span className="text-[#B89070]"> · {visibles.length} recetas</span>}
+            </p>
           </div>
           {resultado && (
             <button onClick={() => window.print()} className="btn btn-secondary">
@@ -212,91 +307,213 @@ export default function RecetarioPage() {
         )}
 
         {/* ── Buscador ── */}
-        <form onSubmit={calcular} className={`${CARD} p-4 flex flex-wrap gap-3 items-end no-print`}>
-          <div className="flex flex-col gap-1 relative flex-1 min-w-64">
-            <label className="text-xs text-[#8B6347] font-medium">Producto</label>
-            <input
-              value={busqueda}
-              onChange={(e) => {
-                setBusqueda(e.target.value);
-                setElegido(null);
-                setAbierto(true);
-              }}
-              onFocus={() => setAbierto(true)}
-              onBlur={() => setTimeout(() => setAbierto(false), 150)}
-              placeholder="Ej: medialunas, budín, pan de molde…"
-              className="border border-[#EDE0CC] rounded-lg px-3 py-2 text-base text-[#2C1810] outline-none focus:border-[#D4A843]"
-            />
-            {abierto && sugerencias.length > 0 && (
-              <ul className="absolute top-full mt-1 left-0 right-0 z-20 bg-white border border-[#EDE0CC] rounded-lg shadow-lg max-h-80 overflow-y-auto">
-                {sugerencias.map((p) => (
-                  <li key={p.producto_id}>
+        <form onSubmit={calcular} className={`${CARD} p-5 sm:p-6 no-print`}>
+          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+            <div className="flex flex-col gap-1.5 relative">
+              <label className="text-xs text-[#8B6347] font-semibold uppercase tracking-wide">1 · Producto</label>
+              <div className="relative">
+                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#B89070] pointer-events-none">
+                  <Icono d={ICONO_LUPA} />
+                </span>
+                <input
+                  ref={inputRef}
+                  value={busqueda}
+                  onChange={(e) => {
+                    setBusqueda(e.target.value);
+                    setElegido(null);
+                    setAbierto(true);
+                  }}
+                  onFocus={() => setAbierto(true)}
+                  onBlur={() => setTimeout(() => setAbierto(false), 150)}
+                  onKeyDown={teclaBuscador}
+                  role="combobox"
+                  aria-expanded={abierto}
+                  aria-autocomplete="list"
+                  placeholder="Buscá: medialunas, budín, pan de molde…"
+                  className="w-full border border-[#E2CFAE] rounded-full pl-10 pr-20 py-2.5 text-base text-[#2C1810] bg-[#FFFDF9] outline-none focus:border-[#D4A843] focus:ring-4 focus:ring-[#D4A843]/15 transition"
+                />
+                <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
+                  {busqueda && (
                     <button
                       type="button"
-                      onMouseDown={() => elegir(p)}
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-[#FAF7F2] flex justify-between gap-3"
+                      onClick={limpiar}
+                      aria-label="Borrar"
+                      className="p-1.5 rounded-full text-[#B89070] hover:text-[#2C1810] hover:bg-[#F3EADB]"
                     >
-                      <span className="text-[#2C1810]">{nombreLindo(p.nombre)}</span>
-                      <span className="text-xs text-[#B89070] shrink-0">{p.unidad === "kg" ? "por kg" : "por unidad"}</span>
+                      <Icono d={ICONO_X} />
                     </button>
-                  </li>
-                ))}
-              </ul>
-            )}
+                  )}
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setAbierto((a) => !a);
+                      inputRef.current?.focus();
+                    }}
+                    aria-label="Ver todas las recetas"
+                    className="p-1.5 rounded-full text-[#8B6347] hover:text-[#2C1810] hover:bg-[#F3EADB]"
+                  >
+                    <Icono d={ICONO_CHEVRON} className={`w-4 h-4 transition-transform ${abierto ? "rotate-180" : ""}`} />
+                  </button>
+                </div>
+              </div>
+
+              {abierto && (
+                <div className="absolute top-full mt-2 left-0 right-0 z-20 bg-white border border-[#EDE0CC] rounded-2xl shadow-xl overflow-hidden">
+                  <div className="px-4 py-2 text-xs text-[#B89070] border-b border-[#F3EADB] flex justify-between">
+                    <span>
+                      {sugerencias.length === visibles.length
+                        ? `Todas las recetas (${visibles.length})`
+                        : `${sugerencias.length} de ${visibles.length} recetas`}
+                    </span>
+                    <span className="hidden sm:inline">↑ ↓ para moverte · Enter para elegir</span>
+                  </div>
+                  {sugerencias.length === 0 ? (
+                    <p className="px-4 py-6 text-sm text-center text-[#8B6347]">No hay ninguna receta con &quot;{busqueda}&quot;.</p>
+                  ) : (
+                    <ul ref={listaRef} role="listbox" className="max-h-[min(60vh,28rem)] overflow-y-auto pb-1">
+                      {grupos.map((g) => (
+                        <li key={g.letra}>
+                          <p className="sticky top-0 z-10 bg-[#FBF6EE]/95 backdrop-blur px-4 py-1 text-[11px] font-semibold text-[#B89070] tracking-wider">
+                            {g.letra}
+                          </p>
+                          <ul>
+                            {g.productos.map(({ p, i }) => (
+                              <li key={p.producto_id} data-idx={i} role="option" aria-selected={i === activo}>
+                                <button
+                                  type="button"
+                                  onMouseDown={() => elegir(p)}
+                                  onMouseEnter={() => setActivo(i)}
+                                  className={`w-full text-left px-4 py-2 text-sm flex items-center justify-between gap-3 ${
+                                    i === activo ? "bg-[#FAF1E2]" : ""
+                                  }`}
+                                >
+                                  <span className="text-[#2C1810] truncate">
+                                    <Resaltado texto={nombreLindo(p.nombre)} busqueda={busqueda} />
+                                  </span>
+                                  <span
+                                    className={`text-[11px] shrink-0 rounded-full px-2 py-px border ${
+                                      p.unidad === "kg"
+                                        ? "border-[#E8D3A8] text-[#9A6B1F] bg-[#FDF6E7]"
+                                        : "border-[#E5D9CC] text-[#8B6347] bg-[#FAF7F2]"
+                                    }`}
+                                  >
+                                    {p.unidad === "kg" ? "por kg" : "por unidad"}
+                                  </span>
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs text-[#8B6347] font-semibold uppercase tracking-wide">2 · Cantidad</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    ref={cantidadRef}
+                    value={cantidad}
+                    onChange={(e) => setCantidad(e.target.value)}
+                    inputMode="decimal"
+                    placeholder="0"
+                    className="border border-[#E2CFAE] rounded-full px-4 py-2.5 text-base text-[#2C1810] bg-[#FFFDF9] outline-none focus:border-[#D4A843] focus:ring-4 focus:ring-[#D4A843]/15 transition w-28 tabular-nums"
+                  />
+                  <div className="inline-flex rounded-full bg-[#F3EADB] p-1">
+                    <button
+                      type="button"
+                      disabled={!!elegido && !puedeKg}
+                      onClick={() => setUnidad("kg")}
+                      className={`${toggleBase} !py-1.5 ${unidad === "kg" ? "bg-[#2C1810] text-white shadow-sm" : "text-[#8B6347] hover:text-[#2C1810]"}`}
+                    >
+                      kg
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!!elegido && !puedeUnidad}
+                      onClick={() => setUnidad("unidad")}
+                      className={`${toggleBase} !py-1.5 ${unidad === "unidad" ? "bg-[#2C1810] text-white shadow-sm" : "text-[#8B6347] hover:text-[#2C1810]"}`}
+                    >
+                      unidades
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <button type="submit" disabled={calculando || !elegido || !cantidad} className="btn btn-primary !px-6 !py-2.5">
+                {calculando ? "Calculando…" : "Calcular"}
+              </button>
+            </div>
           </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#8B6347] font-medium">Cantidad</label>
-            <input
-              value={cantidad}
-              onChange={(e) => setCantidad(e.target.value)}
-              inputMode="decimal"
-              placeholder="0"
-              className="border border-[#EDE0CC] rounded-lg px-3 py-2 text-base text-[#2C1810] outline-none focus:border-[#D4A843] w-28"
-            />
-          </div>
-          <div className="inline-flex rounded-lg border border-[#EDE0CC] overflow-hidden text-sm">
-            <button
-              type="button"
-              disabled={!!elegido && !puedeKg}
-              onClick={() => setUnidad("kg")}
-              className={`px-4 py-2 disabled:opacity-30 ${unidad === "kg" ? "bg-[#2C1810] text-white" : "text-[#8B6347]"}`}
-            >
-              kg
-            </button>
-            <button
-              type="button"
-              disabled={!!elegido && !puedeUnidad}
-              onClick={() => setUnidad("unidad")}
-              className={`px-4 py-2 disabled:opacity-30 ${unidad === "unidad" ? "bg-[#2C1810] text-white" : "text-[#8B6347]"}`}
-            >
-              unidades
-            </button>
-          </div>
-          <button type="submit" disabled={calculando || !elegido || !cantidad} className="btn btn-primary !py-2">
-            {calculando ? "Calculando…" : "Calcular"}
-          </button>
+
           {elegido && (
-            <p className="w-full text-xs text-[#B89070]">
-              La receta base rinde {formatPedido(elegido.rinde, elegido.unidad ?? "kg")}
-              {elegido.peso_unidad_g ? ` (unos ${num(elegido.peso_unidad_g, 0)} g cada una)` : ""}.
-            </p>
+            <div className="mt-4 pt-4 border-t border-dashed border-[#EDE0CC] flex flex-wrap items-center gap-x-4 gap-y-2">
+              <p className="text-sm text-[#8B6347]">
+                La receta base rinde <strong className="text-[#2C1810] font-semibold">{formatPedido(elegido.rinde, elegido.unidad ?? "kg")}</strong>
+                {elegido.peso_unidad_g ? ` (unos ${num(elegido.peso_unidad_g, 0)} g cada una)` : ""} ·{" "}
+                {elegido.ingredientes} ingrediente{elegido.ingredientes === 1 ? "" : "s"}.
+              </p>
+              {atajos.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {atajos.map((a) => (
+                    <button
+                      key={a.etiqueta}
+                      type="button"
+                      onClick={() => {
+                        setCantidad(String(a.valor).replace(".", ","));
+                        calcular(undefined, String(a.valor));
+                      }}
+                      className="rounded-full px-3 py-1 text-xs bg-white text-[#5C3D2E] border border-[#EDE0CC] hover:border-[#D4A843] hover:text-[#2C1810] transition-colors"
+                    >
+                      {a.etiqueta} <span className="text-[#B89070] tabular-nums">({formatPedido(a.valor, unidad)})</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
         </form>
 
-        {error && <div className={`${CARD} p-4 text-sm text-red-600 no-print`}>{error}</div>}
+        {error && <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 no-print">{error}</div>}
+
+        {!resultado && !error && data && data.productos.length > 0 && (
+          <div className="no-print rounded-2xl border border-dashed border-[#E2CFAE] px-6 py-10 text-center">
+            <p className="font-display text-lg text-[#2C1810]">¿Qué hacemos hoy?</p>
+            <p className="text-sm text-[#8B6347] mt-1">
+              Buscá un producto o tocá la flechita para ver las {visibles.length} recetas, poné la cantidad y tocá Calcular.
+            </p>
+          </div>
+        )}
 
         {/* ── Resultado ── */}
         {resultado && (
           <div className="space-y-6">
-            <div>
-              <p className="text-xs text-[#8B6347] uppercase tracking-wide font-medium">Orden de producción</p>
-              <h2 className="text-2xl font-bold text-[#2C1810]">
-                {formatPedido(resultado.producto.cantidad, resultado.producto.unidad)} de {nombreLindo(resultado.producto.nombre)}
+            <div className={`${CARD} p-5 sm:p-6 print-plano bg-gradient-to-br from-white to-[#FBF3E4]`}>
+              <p className="text-xs text-[#9A6B1F] uppercase tracking-[0.15em] font-semibold">Orden de producción</p>
+              <h2 className="font-display text-3xl font-semibold tracking-tight text-[#2C1810] mt-1">
+                {nombreLindo(resultado.producto.nombre)}
               </h2>
+              <div className="mt-3 flex flex-wrap gap-2 text-sm">
+                <span className="rounded-full bg-[#2C1810] text-white px-3 py-1 font-medium tabular-nums">
+                  {formatPedido(resultado.producto.cantidad, resultado.producto.unidad)}
+                </span>
+                <span className="rounded-full bg-white border border-[#EDE0CC] text-[#8B6347] px-3 py-1">
+                  {resultado.receta.length} ingrediente{resultado.receta.length === 1 ? "" : "s"}
+                </span>
+                {resultado.preparaciones.length > 0 && (
+                  <span className="rounded-full bg-sky-50 border border-sky-200 text-sky-700 px-3 py-1">
+                    {resultado.preparaciones.length} preparaci{resultado.preparaciones.length === 1 ? "ón" : "ones"} antes
+                  </span>
+                )}
+              </div>
             </div>
 
             {resultado.advertencias.length > 0 && (
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800 space-y-1">
+              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-sm text-amber-800 space-y-1">
                 {resultado.advertencias.map((a, i) => (
                   <p key={i}>⚠ {a}</p>
                 ))}
@@ -304,18 +521,19 @@ export default function RecetarioPage() {
             )}
 
             <div className={`grid gap-6 ${resultado.preparaciones.length > 0 ? "lg:grid-cols-2" : ""}`}>
-              <div className={`${CARD} p-4 print-plano self-start`}>
-                <h3 className="font-semibold text-[#2C1810] mb-2">Ingredientes</h3>
+              <div className={`${CARD} p-5 print-plano self-start`}>
+                <h3 className="font-display text-lg font-semibold text-[#2C1810] mb-2">Ingredientes</h3>
                 <TablaLineas lineas={resultado.receta} />
               </div>
 
               {resultado.preparaciones.length > 0 && (
                 <div className="space-y-4">
-                  <h3 className="font-semibold text-[#2C1810]">Preparaciones que necesitás antes</h3>
+                  <h3 className="font-display text-lg font-semibold text-[#2C1810]">Preparaciones que necesitás antes</h3>
                   {resultado.preparaciones.map((p) => (
-                    <div key={`${p.producto_id}-${p.unidad}`} className={`${CARD} p-4 print-plano`}>
-                      <p className="font-medium text-[#2C1810] mb-2">
-                        {nombreLindo(p.nombre)} <span className="text-[#8B6347] font-normal">— {formatPedido(p.cantidad, p.unidad)}</span>
+                    <div key={`${p.producto_id}-${p.unidad}`} className={`${CARD} p-5 print-plano border-l-4 !border-l-sky-200`}>
+                      <p className="font-semibold text-[#2C1810] mb-2 flex items-baseline justify-between gap-3">
+                        <span>{nombreLindo(p.nombre)}</span>
+                        <span className="text-sm text-[#8B6347] font-medium tabular-nums whitespace-nowrap">{formatPedido(p.cantidad, p.unidad)}</span>
                       </p>
                       <TablaLineas lineas={p.ingredientes} />
                     </div>
@@ -325,10 +543,10 @@ export default function RecetarioPage() {
             </div>
 
             {resultado.preparaciones.length > 0 && (
-              <div className={`${CARD} p-4 print-plano`}>
-                <h3 className="font-semibold text-[#2C1810]">Materia prima total</h3>
+              <div className={`${CARD} p-5 print-plano`}>
+                <h3 className="font-display text-lg font-semibold text-[#2C1810]">Materia prima total</h3>
                 <p className="text-xs text-[#8B6347] mb-2">Todo sumado, incluyendo lo de las preparaciones.</p>
-                <div className="sm:columns-2 gap-8">
+                <div className="sm:columns-2 gap-10">
                   <TablaLineas lineas={resultado.materia_prima} />
                 </div>
               </div>
@@ -338,10 +556,10 @@ export default function RecetarioPage() {
 
         {/* ── Administración de recetas (solo admin) ── */}
         {esAdmin && data && (
-          <div className={`${CARD} p-4 space-y-3 no-print`}>
+          <div className={`${CARD} p-5 space-y-3 no-print`}>
             <div className="flex items-start justify-between flex-wrap gap-3">
               <div>
-                <h2 className="font-semibold text-[#2C1810]">Recetas desde la planilla</h2>
+                <h2 className="font-display text-lg font-semibold text-[#2C1810]">Recetas desde la planilla</h2>
                 <p className="text-xs text-[#8B6347] mt-0.5">
                   Las recetas se editan en el{" "}
                   <a href={data.planilla_url} target="_blank" rel="noreferrer" className="underline">
