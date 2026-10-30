@@ -5068,17 +5068,48 @@ function firmaMovimiento(fecha: string, nombre: string, cuenta: string, importeN
   return `${fecha}|${normalizarTexto(nombre)}|${normalizarTexto(cuenta)}|${importeNeto.toFixed(2)}|${tipo}`;
 }
 
-function firmasExistentes(): Set<string> {
+export interface CajaImportSobrante {
+  id: number;
+  fecha: string;
+  nombre: string;
+  concepto: string;
+  cuenta: string;
+  importeNeto: number;
+  tipoMovimiento: "ingreso" | "salida";
+}
+
+// Movimientos de la base agrupados por firma, como lista (no Set): si la
+// planilla tiene dos filas idénticas el mismo día (ej. dos recaudaciones de
+// $220.000 de Terminal), son dos movimientos y en la base tiene que haber dos.
+// Cada fila de la planilla "consume" uno; lo que sobra en la base es algo que
+// ya no está en la planilla.
+function movimientosPorFirma(): Map<string, CajaImportSobrante[]> {
   const rows = db
     .prepare(
-      `SELECT m.fecha, m.nombre, cu.nombre AS cuenta_nombre, m.importe_neto, m.tipo_movimiento
+      `SELECT m.id, m.fecha, m.nombre, co.nombre AS concepto, cu.nombre AS cuenta, m.importe_neto AS importeNeto,
+              m.tipo_movimiento AS tipoMovimiento
        FROM caja_movimientos m
-       JOIN caja_cuentas cu ON cu.id = m.cuenta_id`
+       JOIN caja_cuentas cu ON cu.id = m.cuenta_id
+       JOIN caja_conceptos co ON co.id = m.concepto_id
+       ORDER BY m.id`
     )
-    .all() as { fecha: string; nombre: string; cuenta_nombre: string; importe_neto: number; tipo_movimiento: string }[];
-  return new Set(
-    rows.map((r) => firmaMovimiento(r.fecha, r.nombre, r.cuenta_nombre, r.importe_neto, r.tipo_movimiento))
-  );
+    .all() as unknown as CajaImportSobrante[];
+  const mapa = new Map<string, CajaImportSobrante[]>();
+  for (const r of rows) {
+    const firma = firmaMovimiento(r.fecha, r.nombre, r.cuenta, r.importeNeto, r.tipoMovimiento);
+    const lista = mapa.get(firma);
+    if (lista) lista.push(r);
+    else mapa.set(firma, [r]);
+  }
+  return mapa;
+}
+
+// Saca de la lista un movimiento con esa firma; false si ya no quedaba ninguno.
+function consumir(pool: Map<string, CajaImportSobrante[]>, firma: string): boolean {
+  const lista = pool.get(firma);
+  if (!lista || lista.length === 0) return false;
+  lista.shift();
+  return true;
 }
 
 export interface CajaImportSaltada {
@@ -5105,6 +5136,7 @@ export interface CajaImportPreview {
   nuevas: number;
   nuevasFilas: CajaImportFilaNueva[]; // detalle de lo que se va a crear — para poder revisarlo antes de confirmar
   paraConfirmar: CajaImportFilaNueva[]; // filas a las que se les completaron datos: se confirman de a una
+  sobrantes: CajaImportSobrante[]; // están en el sistema pero ya no en la planilla (se borraron o cambiaron allá)
   yaCargadas: number;
   saltadas: CajaImportSaltada[];
   conceptosNuevos: string[]; // conceptos de la planilla que no existen todavía (se crearían)
@@ -5228,7 +5260,7 @@ function importarFilaCaja(fila: FilaPlanillaCaja): void {
 
 export function previsualizarImportacionCaja(filasPlanilla: FilaPlanillaCaja[]): CajaImportPreview {
   const filas = completarFilasCaja(filasPlanilla);
-  const existentes = firmasExistentes();
+  const pool = movimientosPorFirma();
   const cuentasConocidas = new Set(listCajaCuentas().map((c) => normalizarTexto(c.nombre)));
   const conceptosConocidos = new Set(listCajaConceptos().map((c) => normalizarTexto(c.nombre)));
 
@@ -5245,7 +5277,7 @@ export function previsualizarImportacionCaja(filasPlanilla: FilaPlanillaCaja[]):
       saltadas.push(problema);
       continue;
     }
-    if (existentes.has(firmaDeFila(fila))) {
+    if (consumir(pool, firmaDeFila(fila))) {
       yaCargadas++;
       continue;
     }
@@ -5265,6 +5297,7 @@ export function previsualizarImportacionCaja(filasPlanilla: FilaPlanillaCaja[]):
     nuevas: nuevasFilas.length,
     nuevasFilas,
     paraConfirmar,
+    sobrantes: [...pool.values()].flat().sort((a, b) => a.fecha.localeCompare(b.fecha)),
     yaCargadas,
     saltadas,
     conceptosNuevos: [...conceptosNuevos],
@@ -5274,16 +5307,15 @@ export function previsualizarImportacionCaja(filasPlanilla: FilaPlanillaCaja[]):
 
 export function ejecutarImportacionCaja(filasPlanilla: FilaPlanillaCaja[]): { importados: number } {
   const filas = completarFilasCaja(filasPlanilla);
-  const existentes = firmasExistentes();
+  const pool = movimientosPorFirma();
   let importados = 0;
 
   withTransaction(() => {
     for (const fila of filas) {
-      if (validarFila(fila) || fila.completado) continue;
-      const firma = firmaDeFila(fila);
-      if (existentes.has(firma)) continue;
+      if (validarFila(fila)) continue;
+      if (consumir(pool, firmaDeFila(fila))) continue;
+      if (fila.completado) continue;
       importarFilaCaja(fila);
-      existentes.add(firma); // por si la planilla trae la misma fila duplicada dos veces
       importados++;
     }
   });
@@ -5292,16 +5324,19 @@ export function ejecutarImportacionCaja(filasPlanilla: FilaPlanillaCaja[]): { im
 }
 
 // Importa UNA fila de las que se completaron solas, después de que alguien la
-// revisó en la vista previa. Se busca por firma sobre la planilla recién leída.
+// revisó en la vista previa. Se rehace el emparejamiento sobre la planilla
+// recién leída y se importa una de las que siguen sin su movimiento.
 export function confirmarFilaCaja(
   filasPlanilla: FilaPlanillaCaja[],
   elegida: { fecha: string; nombre: string; cuenta: string; importeNeto: number; tipoMovimiento: string }
 ): { importado: boolean; error?: string } {
   const objetivo = firmaMovimiento(elegida.fecha, elegida.nombre, elegida.cuenta, elegida.importeNeto, elegida.tipoMovimiento);
-  const fila = completarFilasCaja(filasPlanilla).find((f) => f.completado && !validarFila(f) && firmaDeFila(f) === objetivo);
-  if (!fila) return { importado: false, error: "La fila ya no está igual en la planilla. Volvé a previsualizar." };
-  if (firmasExistentes().has(objetivo)) return { importado: false, error: "Ese movimiento ya está cargado." };
-  importarFilaCaja(fila);
+  const pool = movimientosPorFirma();
+  const pendiente = completarFilasCaja(filasPlanilla).find(
+    (f) => !validarFila(f) && !consumir(pool, firmaDeFila(f)) && f.completado && firmaDeFila(f) === objetivo
+  );
+  if (!pendiente) return { importado: false, error: "Ese movimiento ya está cargado o cambió en la planilla. Volvé a previsualizar." };
+  importarFilaCaja(pendiente);
   return { importado: true };
 }
 

@@ -74,11 +74,22 @@ interface CajaImportFilaNueva {
   advertencia: string | null;
 }
 
+interface CajaImportSobrante {
+  id: number;
+  fecha: string;
+  nombre: string;
+  concepto: string;
+  cuenta: string;
+  importeNeto: number;
+  tipoMovimiento: "ingreso" | "salida";
+}
+
 interface CajaImportPreview {
   totalFilas: number;
   nuevas: number;
   nuevasFilas: CajaImportFilaNueva[];
   paraConfirmar: CajaImportFilaNueva[];
+  sobrantes: CajaImportSobrante[];
   yaCargadas: number;
   saltadas: CajaImportSaltada[];
   conceptosNuevos: string[];
@@ -361,6 +372,21 @@ export default function CajaPage() {
     setPreviewImport((p) =>
       p ? { ...p, paraConfirmar: p.paraConfirmar.filter((x) => claveFila(x) !== claveFila(f)), yaCargadas: p.yaCargadas + 1 } : p
     );
+    fetchMovimientos();
+  }
+
+  // Borra del sistema movimientos que ya no están en la planilla (de a uno o todos).
+  async function borrarSobrantes(lista: CajaImportSobrante[]) {
+    setConfirmando(lista.length === 1 ? `sobrante-${lista[0].id}` : "sobrantes");
+    setErrorImport("");
+    const borrados: number[] = [];
+    for (const s of lista) {
+      const res = await fetch(`/api/caja/${s.id}`, { method: "DELETE" });
+      if (res.ok) borrados.push(s.id);
+    }
+    setConfirmando(null);
+    if (borrados.length < lista.length) setErrorImport("Algunos movimientos no se pudieron borrar. Volvé a previsualizar.");
+    setPreviewImport((p) => (p ? { ...p, sobrantes: p.sobrantes.filter((x) => !borrados.includes(x.id)) } : p));
     fetchMovimientos();
   }
 
@@ -952,6 +978,52 @@ export default function CajaPage() {
                             className="btn btn-secondary !text-xs !px-3 shrink-0"
                           >
                             {confirmando === claveFila(f) ? "Confirmando…" : "Confirmar movimiento"}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {previewImport.sobrantes.length > 0 && (
+                  <div className="border border-red-200 rounded-lg overflow-hidden">
+                    <div className="px-3 py-2 text-xs text-red-800 bg-red-50 border-b border-red-200 flex items-center justify-between gap-3">
+                      <p className="font-medium">
+                        {previewImport.sobrantes.length} movimiento{previewImport.sobrantes.length === 1 ? "" : "s"} del sistema que ya
+                        no {previewImport.sobrantes.length === 1 ? "está" : "están"} en la planilla (se borraron o se cambiaron allá).
+                      </p>
+                      {previewImport.sobrantes.length > 1 && (
+                        <button
+                          onClick={() => borrarSobrantes(previewImport.sobrantes)}
+                          disabled={confirmando !== null}
+                          className="btn btn-secondary !text-xs !px-3 shrink-0"
+                        >
+                          {confirmando === "sobrantes" ? "Borrando…" : "Borrar todos"}
+                        </button>
+                      )}
+                    </div>
+                    <div className="divide-y divide-red-100 max-h-56 overflow-y-auto">
+                      {previewImport.sobrantes.map((s) => (
+                        <div key={s.id} className="px-3 py-2 text-xs flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[#2C1810] font-medium truncate">
+                                {s.fecha} — {s.nombre || "(sin nombre)"}
+                              </span>
+                              <span className={s.tipoMovimiento === "ingreso" ? "text-emerald-700 font-mono shrink-0" : "text-red-600 font-mono shrink-0"}>
+                                {s.tipoMovimiento === "ingreso" ? "+" : "-"} {formatMoneda(s.importeNeto)}
+                              </span>
+                            </div>
+                            <p className="text-[#8B6347]">
+                              {s.concepto} · {s.cuenta}
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => borrarSobrantes([s])}
+                            disabled={confirmando !== null}
+                            className="btn btn-secondary !text-xs !px-3 shrink-0"
+                          >
+                            {confirmando === `sobrante-${s.id}` ? "Borrando…" : "Borrar del sistema"}
                           </button>
                         </div>
                       ))}
