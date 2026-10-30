@@ -3273,6 +3273,10 @@ export function decidirFranco(empleadoId: number, fecha: string, decision: "fran
   ).run(empleadoId, fecha, decision);
 }
 
+// Los francos se empezaron a confirmar en noviembre de 2026: antes de esa
+// fecha las ausencias quedan como estaban (faltas).
+const FRANCOS_DESDE = "2026-11-01";
+
 function lunesDe(fecha: string): string {
   const dia = new Date(`${fecha}T00:00:00Z`).getUTCDay();
   return addDiasISO(fecha, -((dia + 6) % 7));
@@ -3418,7 +3422,7 @@ function calcularAusenciasConFrancos(filters: { desde: string; hasta: string; no
     })
   );
   for (const a of ausencias) {
-    if (a.empleado_id === null || a.justificada || (diasHorario.get(a.empleado_id)?.size ?? 0) < 7) continue;
+    if (a.fecha < FRANCOS_DESDE || a.empleado_id === null || a.justificada || (diasHorario.get(a.empleado_id)?.size ?? 0) < 7) continue;
     const decision = decisiones.get(`${a.empleado_id}|${a.fecha}`);
     if (decision === "franco") a.franco = "confirmado";
     else if (decision === undefined && !semanasConFranco.has(`${a.empleado_id}|${lunesDe(a.fecha)}`)) a.franco = "pendiente";
