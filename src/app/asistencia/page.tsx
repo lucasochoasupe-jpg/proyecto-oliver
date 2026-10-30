@@ -6,6 +6,7 @@ import type { AsistenciaRecord, CumplimientoRow, AusenciaRow } from "@/lib/db";
 import PageHeader from "@/components/PageHeader";
 import EmpleadoMultiSelect from "@/components/EmpleadoMultiSelect";
 import Pildoras from "@/components/Pildoras";
+import FrancosPorConfirmar from "@/components/FrancosPorConfirmar";
 
 interface ResumenSucursal {
   entrada: number;
@@ -462,6 +463,8 @@ export default function AsistenciaPage() {
             </div>
           </div>
         )}
+
+        {desdeFiltro && hastaFiltro && <FrancosPorConfirmar desde={desdeFiltro} hasta={hastaFiltro} onCambio={fetchUnificada} />}
 
         <div className="bg-white rounded-xl border border-[#EDE0CC] p-4 flex flex-wrap gap-3 items-end">
           <EmpleadoMultiSelect value={nombresFiltro} onChange={setNombresFiltro} />

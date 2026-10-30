@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 interface Franco {
@@ -27,7 +28,8 @@ function fechaLarga(iso: string): string {
 // Todos tienen un franco por semana. A quien tiene horario los 7 días, el
 // día que no vino puede ser su franco: RRHH confirma "Franco" o "Falta".
 // Mientras no se conteste no se descuenta; confirmado el franco de una
-// semana, las demás ausencias de esa semana son faltas.
+// semana, las demás ausencias de esa semana son faltas. Se confirman en
+// Asistencia; Liquidación solo muestra el aviso (FrancosAviso).
 export default function FrancosPorConfirmar({ desde, hasta, onCambio }: { desde: string; hasta: string; onCambio: () => void }) {
   const [francos, setFrancos] = useState<Franco[]>([]);
   const [verConfirmados, setVerConfirmados] = useState(false);
@@ -107,7 +109,7 @@ export default function FrancosPorConfirmar({ desde, hasta, onCambio }: { desde:
       </div>
       <p className="text-xs text-[#8B6347]">
         Estos empleados tienen horario los 7 días y no vinieron. ¿Fue su franco de la semana? Mientras no lo confirmes, ese día no se
-        descuenta. Si confirmás el franco, las otras faltas de esa semana sí se descuentan.
+        descuenta en la Liquidación. Si confirmás el franco, las otras faltas de esa semana sí se descuentan.
       </p>
 
       {pendientes.length === 0 ? (
@@ -161,6 +163,31 @@ export default function FrancosPorConfirmar({ desde, hasta, onCambio }: { desde:
           })}
         </ul>
       )}
+    </div>
+  );
+}
+
+// Aviso para Liquidación: cuántos días esperan confirmación en Asistencia.
+export function FrancosAviso({ desde, hasta }: { desde: string; hasta: string }) {
+  const [pendientes, setPendientes] = useState(0);
+
+  useEffect(() => {
+    if (!desde || !hasta) return;
+    fetch(`/api/liquidacion/francos?desde=${desde}&hasta=${hasta}`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((f: Franco[]) => setPendientes(f.filter((x) => x.estado === "pendiente").length));
+  }, [desde, hasta]);
+
+  if (pendientes === 0) return null;
+  return (
+    <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800 flex flex-wrap items-center justify-between gap-2">
+      <span>
+        ⚠ Hay {pendientes} día{pendientes === 1 ? "" : "s"} que pueden ser francos sin confirmar en este período: no se descuentan hasta que
+        se confirmen.
+      </span>
+      <Link href="/asistencia" className="btn btn-secondary !text-xs !px-3">
+        Confirmar en Asistencia
+      </Link>
     </div>
   );
 }

@@ -3,7 +3,7 @@
 import { Fragment, useEffect, useState, useCallback } from "react";
 import PageHeader from "@/components/PageHeader";
 import ParitariasPendientes from "@/components/ParitariasPendientes";
-import FrancosPorConfirmar from "./FrancosPorConfirmar";
+import { FrancosAviso } from "@/components/FrancosPorConfirmar";
 import EmpleadoMultiSelect from "@/components/EmpleadoMultiSelect";
 
 interface ParteDetalle {
@@ -665,7 +665,7 @@ function LiquidacionMensual() {
         </div>
       </div>
 
-      {data && <FrancosPorConfirmar desde={data.desde} hasta={data.hasta} onCambio={fetchData} />}
+      {data && <FrancosAviso desde={data.desde} hasta={data.hasta} />}
 
       {data && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
