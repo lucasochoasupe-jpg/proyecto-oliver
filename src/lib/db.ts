@@ -5023,8 +5023,10 @@ export function calcularResumenCaja(filters: { desde?: string; hasta?: string } 
 // El parseo del CSV vive en caja-import.ts (sin tocar la base) — acá solo se
 // resuelve contra lo que ya existe y se decide qué es nuevo.
 
+// Los espacios dobles se cuentan como uno: "Pagos  VER honorarios" y
+// "Pagos VER honorarios" son la misma fila (si no, se reimportaba duplicada).
 function normalizarTexto(s: string): string {
-  return s.trim().toLowerCase();
+  return s.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 function getCajaCuentaPorNombreFlexible(nombre: string): CajaCuenta | null {
