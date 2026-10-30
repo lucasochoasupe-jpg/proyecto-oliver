@@ -16,13 +16,19 @@ function lunesDe(iso: string): string {
   return d.toISOString().slice(0, 10);
 }
 
-function fechaLarga(iso: string): string {
-  return new Date(`${iso}T12:00:00Z`).toLocaleDateString("es-AR", {
-    weekday: "short",
-    day: "2-digit",
-    month: "2-digit",
-    timeZone: "UTC",
-  });
+function fechaCorta(iso: string): string {
+  const dia = new Date(`${iso}T12:00:00Z`).toLocaleDateString("es-AR", { weekday: "short", timeZone: "UTC" }).replace(".", "");
+  const [, m, d] = iso.split("-");
+  return `${dia} ${d}/${m}`;
+}
+
+function agruparPorEmpleado(lista: Franco[]): { id: number; nombre: string; dias: Franco[] }[] {
+  const m = new Map<number, { id: number; nombre: string; dias: Franco[] }>();
+  for (const f of lista) {
+    if (!m.has(f.empleado_id)) m.set(f.empleado_id, { id: f.empleado_id, nombre: f.empleado_nombre, dias: [] });
+    m.get(f.empleado_id)!.dias.push(f);
+  }
+  return [...m.values()].sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
 }
 
 // Todos tienen un franco por semana. A quien tiene horario los 7 días, el
@@ -30,10 +36,14 @@ function fechaLarga(iso: string): string {
 // Mientras no se conteste no se descuenta; confirmado el franco de una
 // semana, las demás ausencias de esa semana son faltas. Se confirman en
 // Asistencia; Liquidación solo muestra el aviso (FrancosAviso).
+// Cerrado muestra una sola línea; abierto, una fila por empleado con sus
+// días como pastillas (al tocar una aparecen Franco / Falta).
 export default function FrancosPorConfirmar({ desde, hasta, onCambio }: { desde: string; hasta: string; onCambio: () => void }) {
   const [francos, setFrancos] = useState<Franco[]>([]);
+  const [abierto, setAbierto] = useState(false);
   const [verConfirmados, setVerConfirmados] = useState(false);
-  const [procesando, setProcesando] = useState<string | null>(null);
+  const [elegido, setElegido] = useState<string | null>(null);
+  const [procesando, setProcesando] = useState(false);
 
   const cargar = useCallback(async () => {
     if (!desde || !hasta) return;
@@ -45,21 +55,24 @@ export default function FrancosPorConfirmar({ desde, hasta, onCambio }: { desde:
     cargar();
   }, [cargar]);
 
-  async function decidir(f: Franco, decision: "franco" | "falta" | null) {
-    const k = `${f.empleado_id}|${f.fecha}`;
-    setProcesando(k);
+  async function enviar(body: object) {
+    setProcesando(true);
     await fetch("/api/liquidacion/francos", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ empleadoId: f.empleado_id, fecha: f.fecha, decision }),
+      body: JSON.stringify(body),
     });
-    setProcesando(null);
+    setProcesando(false);
+    setElegido(null);
     await cargar();
     onCambio();
   }
 
+  const pendientes = francos.filter((f) => f.estado === "pendiente");
+  const confirmados = francos.filter((f) => f.estado === "confirmado");
+
   // La primera falta de cada semana (lunes a domingo) de cada empleado.
-  async function primeraDeCadaSemana() {
+  function primeraDeCadaSemana() {
     const vistos = new Set<string>();
     const lote: { empleadoId: number; fecha: string }[] = [];
     for (const f of [...pendientes].sort((a, b) => a.fecha.localeCompare(b.fecha))) {
@@ -68,100 +81,130 @@ export default function FrancosPorConfirmar({ desde, hasta, onCambio }: { desde:
       vistos.add(k);
       lote.push({ empleadoId: f.empleado_id, fecha: f.fecha });
     }
-    setProcesando("lote");
-    await fetch("/api/liquidacion/francos", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ francos: lote }),
-    });
-    setProcesando(null);
-    await cargar();
-    onCambio();
+    enviar({ francos: lote });
   }
 
-  const pendientes = francos.filter((f) => f.estado === "pendiente");
-  const confirmados = francos.filter((f) => f.estado === "confirmado");
   if (francos.length === 0) return null;
+  const grupos = agruparPorEmpleado(verConfirmados ? confirmados : pendientes);
+  const empleadosPendientes = new Set(pendientes.map((f) => f.empleado_id)).size;
 
   return (
-    <div className="bg-white rounded-xl border border-[#EDE0CC] p-4 space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-[#2C1810]">
-          Francos para confirmar
-          {pendientes.length > 0 && (
-            <span className="ml-2 text-xs bg-amber-100 text-amber-800 border border-amber-300 px-2 py-0.5 rounded-full">
-              {pendientes.length}
+    <div className="bg-white rounded-xl border border-[#EDE0CC]">
+      <div className="px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+        <button onClick={() => setAbierto((a) => !a)} className="flex items-center gap-2 text-left group">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            className={`w-4 h-4 text-[#8B6347] transition-transform ${abierto ? "rotate-90" : ""}`}
+            aria-hidden
+          >
+            <path d="m9 18 6-6-6-6" />
+          </svg>
+          <span className="text-sm font-semibold text-[#2C1810] group-hover:underline">Francos para confirmar</span>
+          {pendientes.length > 0 ? (
+            <span className="text-xs bg-amber-100 text-amber-800 border border-amber-300 px-2 py-0.5 rounded-full">
+              {pendientes.length} días · {empleadosPendientes} empleado{empleadosPendientes === 1 ? "" : "s"}
             </span>
+          ) : (
+            <span className="text-xs text-emerald-700">✓ todo confirmado</span>
           )}
-        </h2>
-        <div className="flex flex-wrap items-center gap-3">
-          {confirmados.length > 0 && (
-            <button onClick={() => setVerConfirmados((v) => !v)} className="text-xs text-[#8B6347] hover:text-[#2C1810] underline">
-              {verConfirmados ? "Ocultar" : "Ver"} francos ya confirmados ({confirmados.length})
-            </button>
-          )}
-          {pendientes.length > 0 && (
-            <button onClick={primeraDeCadaSemana} disabled={procesando !== null} className="btn btn-secondary !text-xs !px-3">
-              {procesando === "lote" ? "Confirmando…" : "Tomar como franco la primera falta de cada semana"}
-            </button>
+        </button>
+        {pendientes.length > 0 && (
+          <button onClick={primeraDeCadaSemana} disabled={procesando} className="btn btn-secondary !text-xs !px-3">
+            {procesando ? "Confirmando…" : "Tomar la primera falta de cada semana como franco"}
+          </button>
+        )}
+      </div>
+
+      {abierto && (
+        <div className="border-t border-[#F3EADB] px-4 py-3 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-[#8B6347] max-w-2xl">
+              Tienen horario los 7 días y no vinieron. Tocá un día para decir si fue su franco o una falta. Mientras no se confirme, no se
+              descuenta en la Liquidación.
+            </p>
+            {confirmados.length > 0 && (
+              <button
+                onClick={() => {
+                  setVerConfirmados((v) => !v);
+                  setElegido(null);
+                }}
+                className="text-xs text-[#8B6347] hover:text-[#2C1810] underline"
+              >
+                {verConfirmados ? "Ver los que faltan confirmar" : `Ver francos confirmados (${confirmados.length})`}
+              </button>
+            )}
+          </div>
+
+          {grupos.length === 0 ? (
+            <p className="text-sm text-[#B89070]">No hay días para confirmar en este período.</p>
+          ) : (
+            <ul className="divide-y divide-[#F3EADB]">
+              {grupos.map((g) => (
+                <li key={g.id} className="py-2 flex flex-col sm:flex-row sm:items-center gap-x-4 gap-y-1.5">
+                  <span className="text-sm font-medium text-[#2C1810] sm:w-56 shrink-0 truncate">{g.nombre}</span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {g.dias.map((f) => {
+                      const k = `${f.empleado_id}|${f.fecha}`;
+                      const activo = elegido === k;
+                      if (activo) {
+                        return (
+                          <span key={k} className="inline-flex items-center rounded-full border border-[#2C1810] overflow-hidden text-xs">
+                            <span className="px-2.5 py-1 bg-[#2C1810] text-white tabular-nums">{fechaCorta(f.fecha)}</span>
+                            {f.estado === "pendiente" ? (
+                              <>
+                                <button
+                                  onClick={() => enviar({ empleadoId: f.empleado_id, fecha: f.fecha, decision: "franco" })}
+                                  disabled={procesando}
+                                  className="px-2.5 py-1 text-emerald-700 hover:bg-emerald-50"
+                                >
+                                  Franco
+                                </button>
+                                <button
+                                  onClick={() => enviar({ empleadoId: f.empleado_id, fecha: f.fecha, decision: "falta" })}
+                                  disabled={procesando}
+                                  className="px-2.5 py-1 text-red-700 hover:bg-red-50 border-l border-[#EDE0CC]"
+                                >
+                                  Falta
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                onClick={() => enviar({ empleadoId: f.empleado_id, fecha: f.fecha, decision: null })}
+                                disabled={procesando}
+                                className="px-2.5 py-1 text-[#8B6347] hover:bg-[#FAF7F2]"
+                              >
+                                Deshacer
+                              </button>
+                            )}
+                            <button onClick={() => setElegido(null)} className="px-2 py-1 text-[#B89070] hover:text-[#2C1810]" aria-label="Cerrar">
+                              ×
+                            </button>
+                          </span>
+                        );
+                      }
+                      return (
+                        <button
+                          key={k}
+                          onClick={() => setElegido(k)}
+                          className={`rounded-full px-2.5 py-1 text-xs tabular-nums border transition-colors ${
+                            f.estado === "confirmado"
+                              ? "bg-emerald-50 border-emerald-200 text-emerald-800 hover:border-emerald-500"
+                              : "bg-[#FFFBF3] border-[#EDE0CC] text-[#5C3D2E] hover:border-[#D4A843] hover:text-[#2C1810]"
+                          }`}
+                        >
+                          {fechaCorta(f.fecha)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
-      </div>
-      <p className="text-xs text-[#8B6347]">
-        Estos empleados tienen horario los 7 días y no vinieron. ¿Fue su franco de la semana? Mientras no lo confirmes, ese día no se
-        descuenta en la Liquidación. Si confirmás el franco, las otras faltas de esa semana sí se descuentan.
-      </p>
-
-      {pendientes.length === 0 ? (
-        <p className="text-sm text-[#B89070]">No hay francos para confirmar en este período.</p>
-      ) : (
-        <ul className="divide-y divide-[#F3EADB]">
-          {pendientes.map((f) => {
-            const k = `${f.empleado_id}|${f.fecha}`;
-            return (
-              <li key={k} className="py-2 flex flex-wrap items-center justify-between gap-2">
-                <span className="text-sm text-[#2C1810]">
-                  <span className="font-medium">{f.empleado_nombre}</span>{" "}
-                  <span className="text-[#8B6347]">no vino el {fechaLarga(f.fecha)}</span>
-                </span>
-                <div className="flex gap-2">
-                  <button onClick={() => decidir(f, "franco")} disabled={procesando !== null} className="btn btn-secondary !text-xs !px-3">
-                    {procesando === k ? "…" : "Fue franco"}
-                  </button>
-                  <button
-                    onClick={() => decidir(f, "falta")}
-                    disabled={procesando !== null}
-                    className="btn !text-xs !px-3 bg-white text-red-700 border border-red-200 hover:border-red-500"
-                  >
-                    Fue falta
-                  </button>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-
-      {verConfirmados && confirmados.length > 0 && (
-        <ul className="divide-y divide-[#F3EADB] border-t border-[#F3EADB]">
-          {confirmados.map((f) => {
-            const k = `${f.empleado_id}|${f.fecha}`;
-            return (
-              <li key={k} className="py-2 flex flex-wrap items-center justify-between gap-2 text-sm">
-                <span className="text-[#2C1810]">
-                  {f.empleado_nombre} <span className="text-emerald-700">· franco el {fechaLarga(f.fecha)}</span>
-                </span>
-                <button
-                  onClick={() => decidir(f, null)}
-                  disabled={procesando !== null}
-                  className="text-xs text-[#8B6347] hover:text-[#2C1810] underline"
-                >
-                  Deshacer
-                </button>
-              </li>
-            );
-          })}
-        </ul>
       )}
     </div>
   );
