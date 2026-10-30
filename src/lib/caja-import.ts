@@ -15,31 +15,43 @@ export interface FilaPlanillaCaja {
   iva: number;
   otrosConceptos: number;
   nota: string | null;
+  completado?: string; // qué datos faltantes se completaron copiando de filas parecidas
 }
 
-function parseCSVLine(line: string): string[] {
-  const out: string[] = [];
+// Recorre el CSV entero (no línea por línea): una celda entre comillas puede
+// traer un Enter adentro (ej. "DEBITO DIRECTO⏎" en la planilla real), y
+// cortar por renglón partía esa fila en dos filas rotas.
+function parseCSV(texto: string): string[][] {
+  const filas: string[][] = [];
+  let fila: string[] = [];
   let cur = "";
   let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
+  for (let i = 0; i < texto.length; i++) {
+    const c = texto[i];
     if (inQuotes) {
       if (c === '"') {
-        if (line[i + 1] === '"') {
+        if (texto[i + 1] === '"') {
           cur += '"';
           i++;
         } else inQuotes = false;
       } else cur += c;
-    } else {
-      if (c === '"') inQuotes = true;
-      else if (c === ",") {
-        out.push(cur);
-        cur = "";
-      } else cur += c;
-    }
+    } else if (c === '"') inQuotes = true;
+    else if (c === ",") {
+      fila.push(cur);
+      cur = "";
+    } else if (c === "\n" || c === "\r") {
+      if (c === "\r" && texto[i + 1] === "\n") i++;
+      fila.push(cur);
+      filas.push(fila);
+      fila = [];
+      cur = "";
+    } else cur += c;
   }
-  out.push(cur);
-  return out;
+  if (cur || fila.length) {
+    fila.push(cur);
+    filas.push(fila);
+  }
+  return filas;
 }
 
 function parseMonto(s: string): number {
@@ -73,10 +85,8 @@ function correspondeAISO(my: string, fechaFallback: string | null): string {
 }
 
 export function parseCsvCaja(csv: string): FilaPlanillaCaja[] {
-  const lines = csv.split(/\r\n|\n/).filter((l) => l.length > 0);
-  const rows = lines
+  const rows = parseCSV(csv)
     .slice(1)
-    .map(parseCSVLine)
     // Filas reales: Año en un rango razonable — la planilla trae filas de
     // relleno sin usar con año "1899" (formato de fecha vacío de Sheets) que
     // hay que descartar antes de que lleguen a validarFila.
@@ -91,7 +101,7 @@ export function parseCsvCaja(csv: string): FilaPlanillaCaja[] {
     const fISO = fecha ? fechaISO(fecha, anio) : null;
     return {
       fecha: fISO,
-      nombre: (nombre ?? "").trim(),
+      nombre: (nombre ?? "").replace(/\s+/g, " ").trim(),
       concepto: (concepto ?? "").trim(),
       cuenta: (cuenta ?? "").trim(),
       correspondeA: correspondeA ? correspondeAISO(correspondeA, fISO) : fISO?.slice(0, 7) ?? "",

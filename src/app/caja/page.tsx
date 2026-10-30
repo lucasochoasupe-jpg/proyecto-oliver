@@ -78,6 +78,7 @@ interface CajaImportPreview {
   totalFilas: number;
   nuevas: number;
   nuevasFilas: CajaImportFilaNueva[];
+  paraConfirmar: CajaImportFilaNueva[];
   yaCargadas: number;
   saltadas: CajaImportSaltada[];
   conceptosNuevos: string[];
@@ -148,6 +149,7 @@ export default function CajaPage() {
   const [previewImport, setPreviewImport] = useState<CajaImportPreview | null>(null);
   const [cargandoPreview, setCargandoPreview] = useState(false);
   const [importando, setImportando] = useState(false);
+  const [confirmando, setConfirmando] = useState<string | null>(null);
   const [resultadoImport, setResultadoImport] = useState<number | null>(null);
   const [errorImport, setErrorImport] = useState("");
 
@@ -336,6 +338,30 @@ export default function CajaPage() {
       return;
     }
     setPreviewImport(data as CajaImportPreview);
+  }
+
+  function claveFila(f: CajaImportFilaNueva) {
+    return `${f.fecha}|${f.nombre}|${f.cuenta}|${f.importeNeto}|${f.tipoMovimiento}`;
+  }
+
+  async function confirmarMovimiento(f: CajaImportFilaNueva) {
+    setConfirmando(claveFila(f));
+    setErrorImport("");
+    const res = await fetch("/api/caja/import/confirmar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(f),
+    });
+    const data = await res.json().catch(() => ({}));
+    setConfirmando(null);
+    if (!res.ok) {
+      setErrorImport(data.error ?? "No se pudo confirmar el movimiento");
+      return;
+    }
+    setPreviewImport((p) =>
+      p ? { ...p, paraConfirmar: p.paraConfirmar.filter((x) => claveFila(x) !== claveFila(f)), yaCargadas: p.yaCargadas + 1 } : p
+    );
+    fetchMovimientos();
   }
 
   async function confirmarImport() {
@@ -893,6 +919,43 @@ export default function CajaPage() {
                         {f.advertencia && <p className="text-amber-700 font-medium mt-0.5">⚠ {f.advertencia}</p>}
                       </div>
                     ))}
+                  </div>
+                )}
+
+                {previewImport.paraConfirmar.length > 0 && (
+                  <div className="border border-amber-200 rounded-lg overflow-hidden">
+                    <p className="px-3 py-2 text-xs font-medium text-amber-800 bg-amber-50 border-b border-amber-200">
+                      {previewImport.paraConfirmar.length} movimiento{previewImport.paraConfirmar.length === 1 ? "" : "s"} para
+                      confirmar: les faltaba algún dato en la planilla y se completó como en otras filas iguales. Revisalos y
+                      confirmalos de a uno.
+                    </p>
+                    <div className="divide-y divide-amber-100 max-h-56 overflow-y-auto">
+                      {previewImport.paraConfirmar.map((f) => (
+                        <div key={claveFila(f)} className="px-3 py-2 text-xs flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[#2C1810] font-medium truncate">
+                                {f.fecha} — {f.nombre || "(sin nombre)"}
+                              </span>
+                              <span className={f.tipoMovimiento === "ingreso" ? "text-emerald-700 font-mono shrink-0" : "text-red-600 font-mono shrink-0"}>
+                                {f.tipoMovimiento === "ingreso" ? "+" : "-"} {formatMoneda(f.importeNeto)}
+                              </span>
+                            </div>
+                            <p className="text-[#8B6347]">
+                              {f.concepto} · {f.cuenta}
+                            </p>
+                            {f.advertencia && <p className="text-amber-700 mt-0.5">{f.advertencia}</p>}
+                          </div>
+                          <button
+                            onClick={() => confirmarMovimiento(f)}
+                            disabled={confirmando !== null}
+                            className="btn btn-secondary !text-xs !px-3 shrink-0"
+                          >
+                            {confirmando === claveFila(f) ? "Confirmando…" : "Confirmar movimiento"}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
 

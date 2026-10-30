@@ -5102,19 +5102,78 @@ export interface CajaImportPreview {
   totalFilas: number;
   nuevas: number;
   nuevasFilas: CajaImportFilaNueva[]; // detalle de lo que se va a crear — para poder revisarlo antes de confirmar
+  paraConfirmar: CajaImportFilaNueva[]; // filas a las que se les completaron datos: se confirman de a una
   yaCargadas: number;
   saltadas: CajaImportSaltada[];
   conceptosNuevos: string[]; // conceptos de la planilla que no existen todavía (se crearían)
   cuentasNuevas: string[]; // ídem para cuentas
 }
 
+// Filas con importe a las que les falta Concepto, Ingreso/Salida o Cuenta: se
+// completan con lo que tienen las otras filas del mismo Nombre en la planilla
+// (ej. "Comision emision echeq" siempre es Impuestos; "Mendoza" Recaudación
+// siempre es Ingreso a Caja Efectivo). Solo si el patrón es claro: al menos 3
+// filas y el 80 % con el mismo valor. Las filas sin importe no se tocan.
+function completarFilasCaja(filas: FilaPlanillaCaja[]): FilaPlanillaCaja[] {
+  const completas = filas.filter((f) => f.fecha && f.importeNeto > 0 && f.concepto && f.tipoMovimiento && f.cuenta);
+  function masComun(grupo: FilaPlanillaCaja[], valor: (f: FilaPlanillaCaja) => string): string | null {
+    if (grupo.length < 3) return null;
+    const cuenta = new Map<string, { n: number; original: string }>();
+    for (const f of grupo) {
+      const v = valor(f);
+      const c = cuenta.get(normalizarTexto(v)) ?? { n: 0, original: v };
+      c.n++;
+      cuenta.set(normalizarTexto(v), c);
+    }
+    const mejor = [...cuenta.values()].sort((a, b) => b.n - a.n)[0];
+    return mejor && mejor.n / grupo.length >= 0.8 ? mejor.original : null;
+  }
+  return filas.map((f) => {
+    if (!f.fecha || !(f.importeNeto > 0) || !f.nombre || (f.concepto && f.tipoMovimiento && f.cuenta)) return f;
+    const mismoNombre = completas.filter((c) => normalizarTexto(c.nombre) === normalizarTexto(f.nombre));
+    const out = { ...f };
+    const hechos: string[] = [];
+    if (!out.concepto) {
+      const v = masComun(mismoNombre, (c) => c.concepto.trim());
+      if (v) {
+        out.concepto = v;
+        hechos.push(`concepto "${v}"`);
+      }
+    }
+    // Movimiento y cuenta se miran entre las del mismo Nombre y Concepto.
+    const parecidas = out.concepto
+      ? mismoNombre.filter((c) => normalizarTexto(c.concepto) === normalizarTexto(out.concepto))
+      : mismoNombre;
+    if (!out.tipoMovimiento) {
+      const v = masComun(parecidas, (c) => c.tipoMovimiento!);
+      if (v) {
+        out.tipoMovimiento = v as "ingreso" | "salida";
+        hechos.push(v === "ingreso" ? "Ingreso" : "Salida");
+      }
+    }
+    if (!out.cuenta) {
+      const v = masComun(parecidas, (c) => c.cuenta);
+      if (v) {
+        out.cuenta = v;
+        hechos.push(`cuenta "${v}"`);
+      }
+    }
+    if (hechos.length) out.completado = `se completó ${hechos.join(", ")} como las otras filas de "${f.nombre}"`;
+    return out;
+  });
+}
+
+// Junta todo lo que le falta a la fila (no solo lo primero), así en la lista
+// de saltadas se ve de una qué hay que completar en la planilla.
 function validarFila(fila: FilaPlanillaCaja): CajaImportSaltada | null {
-  if (!fila.cuenta) return { motivo: "sin cuenta", fecha: fila.fecha, nombre: fila.nombre, concepto: fila.concepto, cuenta: fila.cuenta, importeNeto: fila.importeNeto };
-  if (!fila.concepto) return { motivo: "sin concepto", fecha: fila.fecha, nombre: fila.nombre, concepto: fila.concepto, cuenta: fila.cuenta, importeNeto: fila.importeNeto };
-  if (!fila.fecha) return { motivo: "fecha inválida", fecha: fila.fecha, nombre: fila.nombre, concepto: fila.concepto, cuenta: fila.cuenta, importeNeto: fila.importeNeto };
-  if (!fila.tipoMovimiento) return { motivo: "sin tipo de movimiento (Ingreso/Salida)", fecha: fila.fecha, nombre: fila.nombre, concepto: fila.concepto, cuenta: fila.cuenta, importeNeto: fila.importeNeto };
-  if (fila.importeNeto <= 0) return { motivo: "importe 0 o inválido", fecha: fila.fecha, nombre: fila.nombre, concepto: fila.concepto, cuenta: fila.cuenta, importeNeto: fila.importeNeto };
-  return null;
+  const faltan: string[] = [];
+  if (!fila.fecha) faltan.push("fecha inválida");
+  if (fila.importeNeto <= 0) faltan.push("sin importe");
+  if (!fila.concepto) faltan.push("sin concepto");
+  if (!fila.tipoMovimiento) faltan.push("sin Ingreso/Salida");
+  if (!fila.cuenta) faltan.push("sin cuenta");
+  if (faltan.length === 0) return null;
+  return { motivo: faltan.join(", "), fecha: fila.fecha, nombre: fila.nombre, concepto: fila.concepto, cuenta: fila.cuenta, importeNeto: fila.importeNeto };
 }
 
 // El año de la fecha debería coincidir con el de "Corresponde a" — la fila
@@ -5132,13 +5191,48 @@ function advertenciaFecha(fila: FilaPlanillaCaja): string | null {
   return null;
 }
 
-export function previsualizarImportacionCaja(filas: FilaPlanillaCaja[]): CajaImportPreview {
+function filaNueva(fila: FilaPlanillaCaja): CajaImportFilaNueva {
+  return {
+    fecha: fila.fecha!,
+    nombre: nombreEfectivo(fila),
+    concepto: fila.concepto,
+    cuenta: fila.cuenta,
+    importeNeto: fila.importeNeto,
+    tipoMovimiento: fila.tipoMovimiento!,
+    advertencia: [fila.completado, advertenciaFecha(fila)].filter(Boolean).join(" · ") || null,
+  };
+}
+
+function firmaDeFila(fila: FilaPlanillaCaja): string {
+  return firmaMovimiento(fila.fecha!, nombreEfectivo(fila), fila.cuenta, fila.importeNeto, fila.tipoMovimiento!);
+}
+
+function importarFilaCaja(fila: FilaPlanillaCaja): void {
+  const cuenta = getOrCrearCajaCuentaFlexible(fila.cuenta);
+  const concepto = getOrCrearCajaConceptoFlexible(fila.concepto);
+  crearCajaMovimiento({
+    fecha: fila.fecha!,
+    nombre: fila.nombre || concepto.nombre,
+    conceptoId: concepto.id,
+    cuentaId: cuenta.id,
+    correspondeA: fila.correspondeA || fila.fecha!.slice(0, 7),
+    tipoMovimiento: fila.tipoMovimiento!,
+    importeNeto: fila.importeNeto,
+    iva: fila.iva,
+    otrosConceptos: fila.otrosConceptos,
+    nota: fila.nota,
+  });
+}
+
+export function previsualizarImportacionCaja(filasPlanilla: FilaPlanillaCaja[]): CajaImportPreview {
+  const filas = completarFilasCaja(filasPlanilla);
   const existentes = firmasExistentes();
   const cuentasConocidas = new Set(listCajaCuentas().map((c) => normalizarTexto(c.nombre)));
   const conceptosConocidos = new Set(listCajaConceptos().map((c) => normalizarTexto(c.nombre)));
 
   const saltadas: CajaImportSaltada[] = [];
   const nuevasFilas: CajaImportFilaNueva[] = [];
+  const paraConfirmar: CajaImportFilaNueva[] = [];
   const conceptosNuevos = new Set<string>();
   const cuentasNuevas = new Set<string>();
   let yaCargadas = 0;
@@ -5149,20 +5243,17 @@ export function previsualizarImportacionCaja(filas: FilaPlanillaCaja[]): CajaImp
       saltadas.push(problema);
       continue;
     }
-    const firma = firmaMovimiento(fila.fecha!, nombreEfectivo(fila), fila.cuenta, fila.importeNeto, fila.tipoMovimiento!);
-    if (existentes.has(firma)) {
+    if (existentes.has(firmaDeFila(fila))) {
       yaCargadas++;
       continue;
     }
-    nuevasFilas.push({
-      fecha: fila.fecha!,
-      nombre: nombreEfectivo(fila),
-      concepto: fila.concepto,
-      cuenta: fila.cuenta,
-      importeNeto: fila.importeNeto,
-      tipoMovimiento: fila.tipoMovimiento!,
-      advertencia: advertenciaFecha(fila),
-    });
+    // Las que se completaron solas no entran en la importación general: se
+    // confirman de a una (ver confirmarFilaCaja).
+    if (fila.completado) {
+      paraConfirmar.push(filaNueva(fila));
+      continue;
+    }
+    nuevasFilas.push(filaNueva(fila));
     if (!cuentasConocidas.has(normalizarTexto(fila.cuenta))) cuentasNuevas.add(fila.cuenta);
     if (!conceptosConocidos.has(normalizarTexto(fila.concepto))) conceptosNuevos.add(fila.concepto);
   }
@@ -5171,6 +5262,7 @@ export function previsualizarImportacionCaja(filas: FilaPlanillaCaja[]): CajaImp
     totalFilas: filas.length,
     nuevas: nuevasFilas.length,
     nuevasFilas,
+    paraConfirmar,
     yaCargadas,
     saltadas,
     conceptosNuevos: [...conceptosNuevos],
@@ -5178,36 +5270,37 @@ export function previsualizarImportacionCaja(filas: FilaPlanillaCaja[]): CajaImp
   };
 }
 
-export function ejecutarImportacionCaja(filas: FilaPlanillaCaja[]): { importados: number } {
+export function ejecutarImportacionCaja(filasPlanilla: FilaPlanillaCaja[]): { importados: number } {
+  const filas = completarFilasCaja(filasPlanilla);
   const existentes = firmasExistentes();
   let importados = 0;
 
   withTransaction(() => {
     for (const fila of filas) {
-      if (validarFila(fila)) continue;
-      const firma = firmaMovimiento(fila.fecha!, nombreEfectivo(fila), fila.cuenta, fila.importeNeto, fila.tipoMovimiento!);
+      if (validarFila(fila) || fila.completado) continue;
+      const firma = firmaDeFila(fila);
       if (existentes.has(firma)) continue;
-
-      const cuenta = getOrCrearCajaCuentaFlexible(fila.cuenta);
-      const concepto = getOrCrearCajaConceptoFlexible(fila.concepto);
-      crearCajaMovimiento({
-        fecha: fila.fecha!,
-        nombre: fila.nombre || concepto.nombre,
-        conceptoId: concepto.id,
-        cuentaId: cuenta.id,
-        correspondeA: fila.correspondeA || fila.fecha!.slice(0, 7),
-        tipoMovimiento: fila.tipoMovimiento!,
-        importeNeto: fila.importeNeto,
-        iva: fila.iva,
-        otrosConceptos: fila.otrosConceptos,
-        nota: fila.nota,
-      });
+      importarFilaCaja(fila);
       existentes.add(firma); // por si la planilla trae la misma fila duplicada dos veces
       importados++;
     }
   });
 
   return { importados };
+}
+
+// Importa UNA fila de las que se completaron solas, después de que alguien la
+// revisó en la vista previa. Se busca por firma sobre la planilla recién leída.
+export function confirmarFilaCaja(
+  filasPlanilla: FilaPlanillaCaja[],
+  elegida: { fecha: string; nombre: string; cuenta: string; importeNeto: number; tipoMovimiento: string }
+): { importado: boolean; error?: string } {
+  const objetivo = firmaMovimiento(elegida.fecha, elegida.nombre, elegida.cuenta, elegida.importeNeto, elegida.tipoMovimiento);
+  const fila = completarFilasCaja(filasPlanilla).find((f) => f.completado && !validarFila(f) && firmaDeFila(f) === objetivo);
+  if (!fila) return { importado: false, error: "La fila ya no está igual en la planilla. Volvé a previsualizar." };
+  if (firmasExistentes().has(objetivo)) return { importado: false, error: "Ese movimiento ya está cargado." };
+  importarFilaCaja(fila);
+  return { importado: true };
 }
 
 export default db;
