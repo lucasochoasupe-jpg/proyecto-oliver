@@ -3240,9 +3240,55 @@ export interface AusenciaRow {
   // es falta: viene con justificada = true y sin_goce = false (gana sobre
   // cualquier pedido de RRHH superpuesto) y no se descuenta.
   feriado: string | null;
+  empleado_id: number | null; // null en turnos puntuales
+  // Solo con { conFrancos: true }: 'pendiente' = posible franco que RRHH
+  // todavía no confirmó; 'confirmado' = RRHH dijo que fue su franco.
+  franco: "pendiente" | "confirmado" | null;
 }
 
-export function calcularAusencias(filters: { desde: string; hasta: string; nombres?: string[] }): AusenciaRow[] {
+// ── Francos semanales ───────────────────────────────────────────────────────
+// Todos tienen un franco por semana. Quien tiene horario cargado los 7 días
+// no tiene el franco en el horario, así que el día que no viene puede ser
+// su franco: RRHH lo confirma en Liquidación ("Franco" / "Falta"). Mientras
+// no se conteste, ese día no se descuenta. La semana va de lunes a domingo
+// y tiene un solo franco: confirmado uno, las otras ausencias son faltas.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS francos_decision (
+    empleado_id INTEGER NOT NULL REFERENCES empleados(id),
+    fecha TEXT NOT NULL,
+    decision TEXT NOT NULL CHECK (decision IN ('franco', 'falta')),
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (empleado_id, fecha)
+  );
+`);
+
+export function decidirFranco(empleadoId: number, fecha: string, decision: "franco" | "falta" | null): void {
+  if (decision === null) {
+    db.prepare("DELETE FROM francos_decision WHERE empleado_id = ? AND fecha = ?").run(empleadoId, fecha);
+    return;
+  }
+  db.prepare(
+    `INSERT INTO francos_decision (empleado_id, fecha, decision) VALUES (?, ?, ?)
+     ON CONFLICT(empleado_id, fecha) DO UPDATE SET decision = excluded.decision, created_at = unixepoch()`
+  ).run(empleadoId, fecha, decision);
+}
+
+function lunesDe(fecha: string): string {
+  const dia = new Date(`${fecha}T00:00:00Z`).getUTCDay();
+  return addDiasISO(fecha, -((dia + 6) % 7));
+}
+
+// Los francos (confirmados o por confirmar) no son ausencias: se sacan de la
+// lista salvo que se pidan con { conFrancos: true } (para mostrarlos).
+export function calcularAusencias(
+  filters: { desde: string; hasta: string; nombres?: string[] },
+  opciones: { conFrancos?: boolean } = {}
+): AusenciaRow[] {
+  const todas = calcularAusenciasConFrancos(filters);
+  return opciones.conFrancos ? todas : todas.filter((a) => a.franco === null);
+}
+
+function calcularAusenciasConFrancos(filters: { desde: string; hasta: string; nombres?: string[] }): AusenciaRow[] {
   const cumplimiento = calcularCumplimiento(filters);
   const cubiertos = new Set(
     cumplimiento
@@ -3252,7 +3298,7 @@ export function calcularAusencias(filters: { desde: string; hasta: string; nombr
 
   let query = `
     SELECT h.id AS horario_id, h.dia_semana, h.hora_inicio, h.hora_fin, e.nombre AS empleado_nombre,
-           s.nombre AS sucursal_nombre
+           e.id AS empleado_id, s.nombre AS sucursal_nombre
     FROM horarios_empleado h
     JOIN empleados e ON e.id = h.empleado_id
     LEFT JOIN sucursales s ON s.id = h.sucursal_id
@@ -3269,6 +3315,7 @@ export function calcularAusencias(filters: { desde: string; hasta: string; nombr
     hora_inicio: string;
     hora_fin: string;
     empleado_nombre: string;
+    empleado_id: number;
     sucursal_nombre: string | null;
   }[];
 
@@ -3326,6 +3373,8 @@ export function calcularAusencias(filters: { desde: string; hasta: string; nombr
         hora_fin: h.hora_fin,
         horas: duracionHorarioHoras(h.hora_inicio, h.hora_fin),
         ...estado(h.empleado_nombre, fecha),
+        empleado_id: h.empleado_id,
+        franco: null,
       });
     }
   }
@@ -3343,7 +3392,36 @@ export function calcularAusencias(filters: { desde: string; hasta: string; nombr
       hora_fin: p.hora_fin,
       horas: duracionHorarioHoras(p.hora_inicio, p.hora_fin),
       ...estado(p.empleado_nombre, p.fecha),
+      empleado_id: null,
+      franco: null,
     });
+  }
+
+  // Francos: solo para quien tiene horario los 7 días (si no, el franco ya
+  // está afuera del horario) y solo en faltas sin aviso.
+  const diasHorario = new Map<number, Set<number>>();
+  for (const h of horarios) {
+    if (!diasHorario.has(h.empleado_id)) diasHorario.set(h.empleado_id, new Set());
+    diasHorario.get(h.empleado_id)!.add(h.dia_semana);
+  }
+  const decisiones = new Map(
+    (
+      db
+        .prepare("SELECT empleado_id, fecha, decision FROM francos_decision WHERE fecha BETWEEN ? AND ?")
+        .all(lunesDe(filters.desde), addDiasISO(lunesDe(filters.hasta), 6)) as { empleado_id: number; fecha: string; decision: string }[]
+    ).map((d) => [`${d.empleado_id}|${d.fecha}`, d.decision])
+  );
+  const semanasConFranco = new Set(
+    [...decisiones].filter(([, d]) => d === "franco").map(([k]) => {
+      const [id, fecha] = k.split("|");
+      return `${id}|${lunesDe(fecha)}`;
+    })
+  );
+  for (const a of ausencias) {
+    if (a.empleado_id === null || a.justificada || (diasHorario.get(a.empleado_id)?.size ?? 0) < 7) continue;
+    const decision = decisiones.get(`${a.empleado_id}|${a.fecha}`);
+    if (decision === "franco") a.franco = "confirmado";
+    else if (decision === undefined && !semanasConFranco.has(`${a.empleado_id}|${lunesDe(a.fecha)}`)) a.franco = "pendiente";
   }
 
   return ausencias;
