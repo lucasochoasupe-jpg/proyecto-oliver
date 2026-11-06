@@ -2,6 +2,7 @@ import makeWASocket, {
   Browsers,
   DisconnectReason,
   fetchLatestBaileysVersion,
+  fetchLatestWaWebVersion,
   useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
 import pino from "pino";
@@ -31,12 +32,23 @@ export async function start(): Promise<void> {
   const wasRegistered = state.creds.registered;
 
   let version: [number, number, number] | undefined;
+  // La lista de Baileys en GitHub a veces queda vieja y WhatsApp rechaza la
+  // vinculación (el celular se queda cargando). Primero le preguntamos a
+  // WhatsApp Web su versión actual; si falla, usamos la de Baileys.
   try {
-    const fetched = await fetchLatestBaileysVersion();
+    const fetched = await fetchLatestWaWebVersion();
+    if (!fetched.isLatest) throw fetched.error ?? new Error("sin versión");
     version = fetched.version;
-    console.log(`[bot] Usando Baileys versión ${version.join(".")}`);
+    console.log(`[bot] Usando versión de WhatsApp Web ${version.join(".")}`);
   } catch (err) {
-    console.warn("[bot] No se pudo obtener la última versión de Baileys:", err);
+    console.warn("[bot] No se pudo obtener la versión de WhatsApp Web:", err);
+    try {
+      const fetched = await fetchLatestBaileysVersion();
+      version = fetched.version;
+      console.log(`[bot] Usando Baileys versión ${version.join(".")}`);
+    } catch (err2) {
+      console.warn("[bot] No se pudo obtener la última versión de Baileys:", err2);
+    }
   }
 
   const sock = makeWASocket({
