@@ -110,6 +110,7 @@ export async function start(): Promise<void> {
       const rawId = sock.user?.id ?? "";
       const phone = rawId.split(":")[0] ?? rawId;
       console.log(`[bot] Conectado como ${phone}`);
+      fallos500Seguidos = 0;
       setConnectionState({ status: "connected", qr_string: null, phone });
       return;
     }
@@ -133,6 +134,16 @@ export async function start(): Promise<void> {
       }
 
       if (code === DisconnectReason.badSession) {
+        // WhatsApp usa el 500 también para errores pasajeros de su servidor
+        // ("Stream Errored (ack)"). Con una sesión ya vinculada, reintentamos con
+        // la misma sesión y solo la borramos si falla varias veces seguidas.
+        fallos500Seguidos++;
+        if (wasRegistered && fallos500Seguidos < MAX_FALLOS_500) {
+          console.log(`[bot] Error 500 (${fallos500Seguidos}/${MAX_FALLOS_500 - 1}) con sesión vinculada. Reconectando sin borrar auth/...`);
+          scheduleReconnect(code);
+          return;
+        }
+        fallos500Seguidos = 0;
         console.log("[bot] Sesión inválida (badSession). Borrando auth/ y esperando QR...");
         try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch {}
         setConnectionState({ status: "disconnected", qr_string: null, phone: null });
@@ -201,6 +212,10 @@ export async function start(): Promise<void> {
     }
   });
 }
+
+// Errores 500 seguidos sin llegar a conectar; al tercero se da la sesión por perdida.
+let fallos500Seguidos = 0;
+const MAX_FALLOS_500 = 3;
 
 function scheduleReconnect(code: number | undefined): void {
   if (reconnectTimer) return;
