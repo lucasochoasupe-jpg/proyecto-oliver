@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import PageHeader from "@/components/PageHeader";
 import PedidosWhatsApp from "./PedidosWhatsApp";
+import DesdeCaja from "./DesdeCaja";
 
 interface Empleado {
   id: number;
@@ -221,6 +222,7 @@ export default function AdelantosPage() {
           </p>
         </div>
         <PedidosWhatsApp onCambio={fetchAdelantos} />
+        <DesdeCaja empleados={empleados} onCambio={fetchAdelantos} />
 
         <form onSubmit={agregarAdelanto} className="bg-white rounded-xl border border-[#EDE0CC] p-4 space-y-3">
           <div className="flex flex-wrap gap-3 items-end">
